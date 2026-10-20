@@ -78,9 +78,8 @@ function apply(ev) {
     case "scroll_out": {
       const line = wrapped ?? newLine();
       line.append(...spans(ev.line.runs));
-      if (!wrapped) flow.insertBefore(line, screen);
+      if (!wrapped) addAbove(line);
       wrapped = ev.line.wrap ? line : null;
-      trimScrollback();
       break;
     }
     case "lines": {
@@ -104,9 +103,8 @@ function apply(ev) {
       const block = richBlock(ev);
       const old = ev.replace && flow.querySelector(`.rich[data-id="${CSS.escape(ev.id)}"]`);
       if (old) old.replaceWith(block);
-      else flow.insertBefore(block, screen);
+      else addAbove(block);
       wrapped = null;
-      trimScrollback();
       break;
     }
     case "title":
@@ -249,9 +247,16 @@ function collapseTrailing(grid) {
   }
 }
 
-function trimScrollback() {
-  // Every child but the screen is a scrollback line or a rich block.
-  while (flow.children.length - 1 > config.scrollback) flow.firstElementChild.remove();
+// Scrollback lines and rich blocks above the screen. Counted: after a change,
+// flow.children.length walks the whole scrollback again.
+let above = 0;
+
+function addAbove(node) {
+  flow.insertBefore(node, screen);
+  if (++above > config.scrollback) {
+    flow.firstElementChild.remove();
+    above--;
+  }
 }
 
 function newLine() {
