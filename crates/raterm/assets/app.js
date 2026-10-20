@@ -506,6 +506,8 @@ function fits(glyph, cells) {
 
 /// The text of a run, with glyphs that do not fit their cells boxed.
 function cellText(text, cells) {
+  // ASCII always fits (see fits): skip segmenting, the bulk of the work.
+  if (/^[\0-\x7f]*$/.test(text)) return [text];
   const nodes = [];
   let plain = "";
   for (const { segment } of graphemes.segment(text)) {
