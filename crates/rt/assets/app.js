@@ -109,16 +109,20 @@ function richBlock(ev) {
   if (ev.id) div.dataset.id = ev.id;
   if (ev.text) div.dataset.text = ev.text;
   if (ev.w) div.style.maxWidth = `${ev.w}ch`;
-  const maxHeight = ev.h ? `${ev.h}lh` : "";
+  let lines = ev.h;
   if (ev.kind === "img" || ev.kind === "svg") {
     // An SVG loaded as an image never runs scripts nor fetches resources.
     const img = document.createElement("img");
     img.addEventListener("load", follow);
+    img.addEventListener("click", () => openViewer(img));
     img.src = ev.content;
-    img.style.maxHeight = maxHeight;
+    const limit = config.images.max_height;
+    if (limit) lines = Math.min(lines ?? limit, limit);
+    if (lines) img.style.maxHeight = `${lines}lh`;
     div.append(img);
     return div;
   }
+  const maxHeight = lines ? `${lines}lh` : "";
   // No allow-scripts: the content can never run JavaScript. allow-same-origin
   // only lets this page measure the content and read its selection. WebKit
   // runs no listener at all on such a document, even one added from here.
@@ -458,8 +462,36 @@ searchInput.addEventListener("keydown", (e) => {
 
 // Keyboard
 
+// Image viewer: a clicked image, full window, over the terminal.
+
+const viewer = document.getElementById("viewer");
+
+function openViewer(img) {
+  const shown = viewer.querySelector("img");
+  shown.src = img.src;
+  shown.classList.toggle("vector", img.closest(".rich").classList.contains("svg"));
+  viewer.hidden = false;
+}
+
+function closeViewer() {
+  viewer.hidden = true;
+  viewer.querySelector("img").removeAttribute("src");
+  input.focus({ preventScroll: true });
+}
+
+// Closes on the cross or anywhere around the image, not on the image itself.
+viewer.addEventListener("click", (e) => {
+  if (e.target.tagName !== "IMG") closeViewer();
+});
+
 function onKeydown(e) {
   if (e.isComposing) return;
+  if (!viewer.hidden) {
+    // Keys belong to the viewer while it is open, not to the program.
+    if (e.key === "Escape") closeViewer();
+    e.preventDefault();
+    return;
+  }
   const binding = keys[keyName(e)];
   if (binding !== undefined && runAction(binding)) {
     e.preventDefault();

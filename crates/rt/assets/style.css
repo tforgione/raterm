@@ -141,8 +141,50 @@ html, body {
 .rich img {
   display: block;
   max-width: 100%;
+  /* Keeps the aspect ratio when max-height (h, [images] max_height) clamps it. */
+  object-fit: contain;
+  object-position: left top;
+  cursor: zoom-in;
 }
 
 .rich.svg img {
   width: 100%;
+}
+
+#viewer {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: 10;
+}
+
+#viewer img {
+  max-width: 95%;
+  max-height: 95%;
+}
+
+/* SVGs have no natural size worth keeping: fill the window instead. */
+#viewer img.vector {
+  width: 95%;
+  height: 95%;
+  object-fit: contain;
+}
+
+#viewer button {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  font: 28px/1 sans-serif;
+  color: #fff;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
+#viewer button:hover {
+  opacity: 1;
 }

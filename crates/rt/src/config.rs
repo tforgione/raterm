@@ -22,6 +22,7 @@ pub struct Config {
     pub font: Font,
     pub cursor: Cursor,
     pub window: Window,
+    pub images: Images,
     /// Shortcuts, as `"ctrl+shift+c" = "copy"` or `"f13" = { send = "..." }`,
     /// merged over the defaults; `"none"` removes a default.
     pub keys: BTreeMap<String, Binding>,
@@ -56,6 +57,13 @@ pub struct Window {
     pub decorations: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Images {
+    /// Maximum height of image and SVG blocks, in lines; unlimited if unset.
+    pub max_height: Option<u16>,
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Binding {
@@ -76,6 +84,7 @@ impl Default for Config {
             font: Font::default(),
             cursor: Cursor::default(),
             window: Window::default(),
+            images: Images::default(),
             keys: BTreeMap::new(),
         }
     }
