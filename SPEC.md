@@ -137,7 +137,7 @@ Chaque jalon est livrable et testable seul. Claude Code travaille un jalon à la
 2. **M1 : un vrai terminal.** Intégration d'`alacritty_terminal`, diff de grille, scrollback DOM, écran alternatif, resize, couleurs, sélection et copier-coller. Tests snapshot en place. Critère : une journée de travail dans `rt` sans ouvrir un autre terminal : cargo, git, vim, htop, less, `ssh` vers une machine distante.
 3. **M2 : la sortie riche.** Filtre OSC 7117, les quatre kinds, l'iframe sandbox, `rt-cat`, le remplacement par `id`. Critère : `rt-cat rapport.md` affiche un tableau large lisible avec lignes alternées, `rt-cat image.png` affiche l'image, un `<script>` dans un bloc `html` ne s'exécute pas.
 4. **M3 : confort.** Config TOML, `user.css`, zoom, recherche, liens cliquables (OSC 8 et URL détectées), titre de fenêtre, plafond de scrollback, raccourcis configurables. Critère : remplacer le terminal par défaut sur le poste.
-5. **M4 : packaging.** Binaire statique ou `.deb`/AUR, fichier `.desktop`, package tpm, README avec la recette bash pour émettre un bloc sans `rt-cat`, export de session en HTML autonome.
+5. **M4 : packaging.** Binaire statique ou `.deb`/AUR, fichier `.desktop`, README avec la recette bash pour émettre un bloc sans `rt-cat`, export de session en HTML autonome.
 
 M2 est le cœur de la valeur ; si M1 prend trop de temps, on accepte un M1 dégradé (pas de souris, pas de sélection dans l'écran alternatif) pour atteindre M2 plus vite.
 
