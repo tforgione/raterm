@@ -11,14 +11,15 @@ pub struct Pty {
 }
 
 impl Pty {
-    /// Spawns `program` in a new pty and returns it with a reader on its output.
+    /// Spawns `command` (program and arguments) in a new pty and returns it
+    /// with a reader on its output.
     pub fn spawn(
-        program: &str,
+        command: &[String],
         cols: u16,
         rows: u16,
     ) -> Result<(Pty, Box<dyn Read + Send>), Error> {
         let pair = native_pty_system().openpty(size(cols, rows))?;
-        let mut cmd = CommandBuilder::new(program);
+        let mut cmd = CommandBuilder::from_argv(command.iter().map(Into::into).collect());
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "rt");
         cmd.env("RT_TERM", "1");
@@ -74,7 +75,7 @@ mod tests {
 
     #[test]
     fn shell_echoes_through_pty() {
-        let (mut pty, mut reader) = Pty::spawn("/bin/sh", 80, 24).unwrap();
+        let (mut pty, mut reader) = Pty::spawn(&["/bin/sh".into()], 80, 24).unwrap();
         pty.write(b"echo rt-$((40+2))\nexit\n").unwrap();
         let mut out = Vec::new();
         // The read ends with EIO on Linux once the child is gone.

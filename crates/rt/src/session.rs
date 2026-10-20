@@ -15,12 +15,14 @@ pub struct Session {
 }
 
 impl Session {
+    /// Runs `command` (program and arguments) in a new terminal.
     pub fn spawn(
         config: &Config,
+        command: &[String],
         cols: u16,
         rows: u16,
     ) -> Result<(Arc<Session>, Box<dyn Read + Send>), Error> {
-        let (pty, reader) = Pty::spawn(&config.shell(), cols, rows)?;
+        let (pty, reader) = Pty::spawn(command, cols, rows)?;
         let mut term = Terminal::new(cols, rows);
         term.bold_is_bright = config.bold_is_bright;
         let session = Session {

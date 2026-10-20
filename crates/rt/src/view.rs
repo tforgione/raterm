@@ -42,8 +42,10 @@ enum Message {
     NewWindow,
 }
 
-pub fn run(config: Config) -> Result<(), Error> {
-    let (session, reader) = Session::spawn(&config, 80, 24)?;
+/// Opens the terminal window, running `command` with `title` as the window
+/// title until the program sets its own.
+pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
+    let (session, reader) = Session::spawn(&config, command, 80, 24)?;
     let reader = RefCell::new(Some(reader));
     // Served as a script so that the page has it before app.js runs.
     let config_js = format!("const rtConfig = {};", serde_json::to_string(&config)?);
@@ -51,7 +53,7 @@ pub fn run(config: Config) -> Result<(), Error> {
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
-        .with_title("rt")
+        .with_title(&title)
         .with_decorations(config.window.decorations)
         .build(&event_loop)?;
 
@@ -107,7 +109,9 @@ pub fn run(config: Config) -> Result<(), Error> {
             Event::UserEvent(UserEvent::Events(json)) => {
                 let _ = webview.evaluate_script(&format!("rt.events({json})"));
             }
-            Event::UserEvent(UserEvent::Title(title)) => window.set_title(&title),
+            Event::UserEvent(UserEvent::Title(set)) => {
+                window.set_title(if set.is_empty() { &title } else { &set })
+            }
             Event::UserEvent(UserEvent::Exit)
             | Event::WindowEvent {
                 event: WindowEvent::CloseRequested,

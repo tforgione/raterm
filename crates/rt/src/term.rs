@@ -34,7 +34,7 @@ pub enum Event {
     Mode {
         app_cursor: bool,
     },
-    /// Window title set by the program (OSC 0/2).
+    /// Window title set by the program (OSC 0/2); empty to reset it.
     Title {
         title: String,
     },
@@ -220,7 +220,9 @@ impl Terminal {
             match event {
                 TermEvent::PtyWrite(text) => update.reply.push_str(&text),
                 TermEvent::Title(title) => update.events.push(Event::Title { title }),
-                TermEvent::ResetTitle => update.events.push(Event::Title { title: "rt".into() }),
+                TermEvent::ResetTitle => update.events.push(Event::Title {
+                    title: String::new(),
+                }),
                 _ => {}
             }
         }

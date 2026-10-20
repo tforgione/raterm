@@ -31,6 +31,7 @@ Composants côté Rust :
 - `term` : état du terminal classique via `alacritty_terminal` (grille, scrollback, modes, écran alternatif, curseur, attributs). On ne réécrit pas de parseur ANSI.
 - `rich` : filtre placé avant le parseur ANSI, qui détecte et extrait la séquence OSC propriétaire (voir section suivante) et produit des blocs riches.
 - `view` : fenêtre `tao` + webview `wry`, page HTML/CSS/JS embarquée dans le binaire par `include_str!`, communication par `ipc` handler de wry (webview → Rust) et `evaluate_script` (Rust → webview).
+- Ligne de commande, compatible avec alacritty : `-T`/`--title` (titre initial de la fenêtre, auquel un reset de titre revient) et `-e`/`--command` (programme et arguments lancés à la place du shell ; prend tous les arguments qui suivent).
 - `config` : fichier TOML dans `$XDG_CONFIG_HOME/rt/config.toml` (shell, police, taille du scrollback, curseur, titre dynamique, gras en couleurs vives, décorations, raccourcis). Les couleurs et tout CSS additionnel vont dans `user.css`, à côté.
 
 Modèle d'affichage : la sortie est un flux vertical de blocs. En écran principal, chaque ligne qui sort de la grille par le haut devient un élément DOM statique dans le scrollback, et un bloc riche est inséré dans ce flux à la position du curseur, comme une ligne de hauteur variable. En écran alternatif, la webview affiche une grille fixe de cellules et masque le flux, puis le restaure à la sortie. Cette distinction est la décision structurante du projet : elle permet un scrollback DOM natif (sélection, recherche, zoom) sans sacrifier les TUI.
@@ -144,7 +145,7 @@ M2 est le cœur de la valeur ; si M1 prend trop de temps, on accepte un M1 dégr
 ## Contraintes techniques et conventions
 
 - Rust stable, édition 2024, `cargo clippy -- -D warnings` et `cargo fmt --check` propres à chaque commit.
-- Crates imposées : `wry` + `tao` (fenêtre et webview, déjà utilisées dans le projet webapp), `portable-pty`, `alacritty_terminal`, `comrak` (Markdown, avec l'extension `table`), `base64`, `serde`/`serde_json`, `clap` pour `rat`, `toml` pour la config, `gtk` pour la sélection primaire (déjà tirée par `tao`, même version). Pas d'autre dépendance sans justification dans le commit.
+- Crates imposées : `wry` + `tao` (fenêtre et webview, déjà utilisées dans le projet webapp), `portable-pty`, `alacritty_terminal`, `comrak` (Markdown, avec l'extension `table`), `base64`, `serde`/`serde_json`, `clap` pour `rat` et les options de `rt`, `toml` pour la config, `gtk` pour la sélection primaire (déjà tirée par `tao`, même version). Pas d'autre dépendance sans justification dans le commit.
 - Cible : Linux uniquement, X11 et Wayland via WebKitGTK (ce que wry utilise sur Linux). Pas de code spécifique à macOS ou Windows, pas de `cfg` morts.
 - Frontend : HTML/CSS/JS vanilla, un seul fichier par type, pas de Node, pas de bundler, pas de dépendance JS externe. Pas de `eval`, pas de `innerHTML` avec du contenu venant du pty en dehors de l'iframe sandbox.
 - Le cœur (`pty`, `term`, `rich`) est une bibliothèque testable sans fenêtre ; `view` est le seul module qui connaît wry. `cargo test` passe en CI headless.
