@@ -41,7 +41,12 @@ cargo install --path crates/rat
 ```
 
 `extra/raterm.desktop` registers raterm as a terminal emulator for application
-launchers: copy it to `~/.local/share/applications/`.
+launchers, with the icon `extra/raterm.png`:
+
+```sh
+cp extra/raterm.desktop ~/.local/share/applications/
+cp extra/raterm.png ~/.local/share/icons/hicolor/256x256/apps/
+```
 
 ## Usage
 
