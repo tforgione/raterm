@@ -144,7 +144,7 @@ function richBlock(ev) {
 /// Stylesheet of rich blocks, using the terminal's current colors.
 function richStyle() {
   const root = getComputedStyle(document.documentElement);
-  const vars = ["--fg", "--bg", "--selection", "--c4", "--c8"]
+  const vars = ["--fg", "--bg", "--selection", "--selection-text", "--c4", "--c8"]
     .map((name) => `${name}: ${root.getPropertyValue(name)};`)
     .join(" ");
   return `
@@ -159,7 +159,7 @@ function richStyle() {
     th { background: rgba(255, 255, 255, 0.08); }
     tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.04); }
     img { max-width: 100%; }
-    ::selection { background: var(--selection); }
+    ::selection { background: var(--selection); color: var(--selection-text); }
   `;
 }
 

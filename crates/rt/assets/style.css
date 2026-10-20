@@ -2,7 +2,9 @@
   --fg: #d8dee9;
   --bg: #1e1e24;
   --cursor: #d8dee9;
-  --selection: #44475a;
+  /* Selected text is shown inverted, as in most terminals. */
+  --selection: var(--fg);
+  --selection-text: var(--bg);
   --c0: #2e3440;
   --c1: #e06c75;
   --c2: #98c379;
@@ -39,6 +41,7 @@ html, body {
 
 ::selection {
   background: var(--selection);
+  color: var(--selection-text);
 }
 
 #flow, #alt {
