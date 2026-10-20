@@ -131,6 +131,10 @@ decorations = true
 [markdown]
 max_width = 100           # width of the centered column of text, in columns; 0: no limit
 
+[blocks]                  # text of Markdown and HTML blocks; code uses the terminal font
+font_family = "sans-serif"
+font_size = 12            # in points
+
 [keys]                    # merged over the default shortcuts; examples:
 "ctrl+shift+e" = "new_window"
 "f13" = { send = "\u001b[25~" }    # text sent to the program

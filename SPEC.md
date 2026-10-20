@@ -61,6 +61,7 @@ Sémantique :
 - Le bloc est inséré à la position du curseur, comme une ligne de hauteur variable. Le curseur passe à la ligne suivante après le bloc.
 - En écran alternatif, les blocs sont ignorés (pas de rendu riche dans vim).
 - Un bloc avec `id` remplace le bloc précédent de même `id` s'il existe, sinon il est inséré normalement. Permet les barres de progression et les tableaux qui se remplissent.
+- Le texte des blocs `md` et `html` utilise la police `[blocks] font_family` à `[blocks] font_size` points (`sans-serif`, 12 par défaut), et suit le zoom ; leur code utilise la police du terminal.
 - Le texte des blocs `md` (paragraphes, titres, listes, code) tient dans une colonne centrée de `[markdown] max_width` colonnes (100 par défaut, 0 pour toute la largeur) ; les tableaux gardent toute la largeur du terminal.
 - Les blocs `img`, `svg` et `video` sont limités en hauteur par `[images] max_height` (en lignes) dans la config, en plus de leur clé `h`. Un clic sur l'un d'eux l'affiche en plein écran sur fond sombre ; Échap, la croix en haut à droite ou un clic n'importe où ramènent au terminal.
 - Le bloc fait partie du scrollback : il est sélectionnable, copiable (comme texte brut pour `md`, comme image pour `img`/`svg`) et conservé dans l'export de session.

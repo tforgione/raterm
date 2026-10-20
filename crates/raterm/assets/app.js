@@ -165,13 +165,16 @@ function richStyle() {
     .map((name) => `${name}: ${root.getPropertyValue(name)};`)
     .join(" ");
   const columns = config.markdown.max_width;
+  // Zooming applies to blocks too (those created afterwards).
+  const scale = 1.1 ** zoom;
+  const text = `${config.blocks.font_size * scale}pt/1.5 ${config.blocks.font_family}`;
   const textWidth = columns ? `${columns * cellWidth}px` : "none";
   return `
     :root { ${vars} color-scheme: dark; }
     html, body { margin: 0; color: var(--fg); background: transparent; overflow-y: hidden; }
-    body { font: 14px/1.5 sans-serif; padding: 4px 0; overflow-x: auto; }
+    body { font: ${text}; padding: 4px 0; overflow-x: auto; }
     a { color: var(--c4); }
-    pre, code { font-family: monospace; }
+    pre, code { font-family: ${config.font.family}, monospace; font-size: 0.9em; }
     pre { padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }
     /* Syntax highlighting: classes are TextMate scopes, colored with the
        terminal palette so that user.css themes them too. */

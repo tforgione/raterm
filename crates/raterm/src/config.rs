@@ -24,6 +24,7 @@ pub struct Config {
     pub window: Window,
     pub images: Images,
     pub markdown: Markdown,
+    pub blocks: Blocks,
     /// Shortcuts, as `"ctrl+shift+c" = "copy"` or `"f13" = { send = "..." }`,
     /// merged over the defaults; `"none"` removes a default.
     pub keys: BTreeMap<String, Binding>,
@@ -79,6 +80,24 @@ impl Default for Markdown {
     }
 }
 
+/// Text of Markdown and HTML blocks; their code uses the terminal font.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Blocks {
+    pub font_family: String,
+    /// In points, like the terminal font.
+    pub font_size: f32,
+}
+
+impl Default for Blocks {
+    fn default() -> Self {
+        Blocks {
+            font_family: "sans-serif".into(),
+            font_size: 12.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Binding {
@@ -101,6 +120,7 @@ impl Default for Config {
             window: Window::default(),
             images: Images::default(),
             markdown: Markdown::default(),
+            blocks: Blocks::default(),
             keys: BTreeMap::new(),
         }
     }
