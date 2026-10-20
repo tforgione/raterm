@@ -121,6 +121,9 @@ decorations = true
 [images]
 # max_height = 30         # in lines, for images, SVG and videos; unlimited if unset
 
+[markdown]
+max_width = 100           # width of the centered column of text, in columns; 0: no limit
+
 [keys]                    # merged over the default shortcuts; examples:
 "ctrl+shift+e" = "new_window"
 "f13" = { send = "\u001b[25~" }    # text sent to the program

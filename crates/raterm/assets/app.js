@@ -142,7 +142,7 @@ function richBlock(ev) {
   const frame = document.createElement("iframe");
   frame.sandbox = "allow-same-origin";
   frame.style.maxHeight = maxHeight;
-  frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>${richStyle()}</style></head><body>${ev.content}</body></html>`;
+  frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>${richStyle()}</style></head><body class="${ev.kind}">${ev.content}</body></html>`;
   frame.addEventListener("load", () => {
     const doc = frame.contentDocument;
     const fit = () => {
@@ -164,6 +164,8 @@ function richStyle() {
   const vars = ["--fg", "--bg", "--selection", "--selection-text", "--c4", "--c8"]
     .map((name) => `${name}: ${root.getPropertyValue(name)};`)
     .join(" ");
+  const columns = config.markdown.max_width;
+  const textWidth = columns ? `${columns * cellWidth}px` : "none";
   return `
     :root { ${vars} color-scheme: dark; }
     html, body { margin: 0; color: var(--fg); background: transparent; overflow-y: hidden; }
@@ -176,6 +178,10 @@ function richStyle() {
     th { background: rgba(255, 255, 255, 0.08); }
     tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.04); }
     img { max-width: 100%; }
+    /* Markdown reads in a centered column; tables keep the whole width, as
+       wide tables are what rendering Markdown is for. */
+    body.md > * { max-width: ${textWidth}; margin-left: auto; margin-right: auto; }
+    body.md > table { max-width: none; margin: 8px auto; }
     ::selection { background: var(--selection); color: var(--selection-text); }
   `;
 }

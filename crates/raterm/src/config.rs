@@ -23,6 +23,7 @@ pub struct Config {
     pub cursor: Cursor,
     pub window: Window,
     pub images: Images,
+    pub markdown: Markdown,
     /// Shortcuts, as `"ctrl+shift+c" = "copy"` or `"f13" = { send = "..." }`,
     /// merged over the defaults; `"none"` removes a default.
     pub keys: BTreeMap<String, Binding>,
@@ -65,6 +66,20 @@ pub struct Images {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Markdown {
+    /// Width of the centered column of text, in columns; 0 for the whole
+    /// terminal width. Tables always get the whole width.
+    pub max_width: u16,
+}
+
+impl Default for Markdown {
+    fn default() -> Self {
+        Markdown { max_width: 100 }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum Binding {
     /// copy, paste, paste_selection, search, zoom_in, zoom_out, zoom_reset,
@@ -85,6 +100,7 @@ impl Default for Config {
             cursor: Cursor::default(),
             window: Window::default(),
             images: Images::default(),
+            markdown: Markdown::default(),
             keys: BTreeMap::new(),
         }
     }
