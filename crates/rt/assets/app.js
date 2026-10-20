@@ -122,6 +122,9 @@ function richBlock(ev) {
     new ResizeObserver(fit).observe(doc.body);
     fit();
     if (ev.kind === "html") div.dataset.text = doc.body.innerText;
+    // A click in the block focuses its document: keys must still reach the
+    // terminal (onKeydown then gives the focus back to it).
+    doc.addEventListener("keydown", onKeydown);
     doc.addEventListener("click", (e) => {
       const link = e.target.closest?.("a[href]");
       if (link) {
@@ -331,7 +334,8 @@ function runAction(binding) {
   }
   switch (binding) {
     case "copy":
-      document.execCommand("copy");
+      // The selection may be inside a rich block that has the focus.
+      (document.activeElement.contentDocument ?? document).execCommand("copy");
       break;
     case "paste":
       input.focus();
@@ -448,7 +452,7 @@ searchInput.addEventListener("keydown", (e) => {
 
 // Keyboard
 
-document.addEventListener("keydown", (e) => {
+function onKeydown(e) {
   if (e.isComposing) return;
   const binding = keys[keyName(e)];
   if (binding !== undefined && runAction(binding)) {
@@ -467,10 +471,13 @@ document.addEventListener("keydown", (e) => {
       type(e.key);
     }
   }
-});
+}
+
+document.addEventListener("keydown", onKeydown);
 
 function type(data) {
   send({ type: "input", data });
+  input.focus({ preventScroll: true });
   toBottom();
 }
 
