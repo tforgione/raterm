@@ -1,4 +1,5 @@
 pub mod config;
+pub mod history;
 pub mod media;
 pub mod pty;
 pub mod rich;

@@ -57,8 +57,6 @@ let queue = [];
 // Same initial modes as the core's terminal (see Modes::of).
 let modes = { app_cursor: false, mouse: 0, sgr_mouse: false, alt_scroll: true };
 let altOn = false;
-// Last scrollback line when it soft-wraps, so its continuation joins it.
-let wrapped = null;
 
 window.raterm = {
   events(list) {
@@ -68,18 +66,35 @@ window.raterm = {
 };
 
 function flush() {
+  const anchor = stick || altOn ? null : anchorAt();
   for (const ev of coalesce(queue)) apply(ev);
   queue = [];
+  sizeSpacers();
+  if (jumpTo !== null) {
+    const node = nodeOf(jumpTo);
+    if (node) flow.scrollTop += node.getBoundingClientRect().top - flow.getBoundingClientRect().top;
+    jumpTo = null;
+  } else if (anchor?.node.isConnected) {
+    flow.scrollTop += anchor.node.getBoundingClientRect().top - anchor.top;
+  }
+  if (cur?.show) showMatch();
   follow();
+  requestMore();
 }
 
 /// Merges the screen updates of a batch, as only the last state of each row
 /// gets painted: a program redrawing fast sends many per frame. A switch of
 /// screen ends a merge, as the rows that follow belong to the other grid.
+/// Entries of the scrollback that the window would drop within the frame are
+/// left out.
 function coalesce(events) {
+  const added = (ev) => ev.type === "scroll_out" || (ev.type === "block" && !ev.replace);
+  let newest = -1;
+  for (const ev of events) if (added(ev)) newest = Math.max(newest, ev.entry);
   const out = [];
   let merged = null;
   for (const ev of events) {
+    if (added(ev) && ev.entry <= newest - WINDOW) continue;
     if (ev.type !== "lines") {
       if (ev.type === "alt") merged = null;
       out.push(ev);
@@ -100,13 +115,18 @@ function coalesce(events) {
 
 function apply(ev) {
   switch (ev.type) {
-    case "scroll_out": {
-      const line = wrapped ?? newLine();
-      line.append(...spans(ev.line.runs));
-      if (!wrapped) addAbove(line);
-      wrapped = ev.line.wrap ? line : null;
+    case "scroll_out":
+      if (ev.entry < scrollback.next) {
+        // A soft-wrapped line continues its entry, the last one.
+        if (win.next === scrollback.next && win.next > win.first) {
+          lower.previousElementSibling.append(...spans(ev.line.runs));
+        }
+      } else {
+        const follows = win.next === scrollback.next;
+        scrollback.next = ev.entry + 1;
+        if (follows) push(ev.entry, lineNode(ev.line.runs));
+      }
       break;
-    }
     case "lines": {
       const grid = altOn ? alt : screen;
       while (grid.children.length > ev.height) grid.lastChild.remove();
@@ -124,17 +144,185 @@ function apply(ev) {
     case "mode":
       modes = ev;
       break;
-    case "block": {
-      const block = richBlock(ev);
-      const old = ev.replace && flow.querySelector(`.rich[data-id="${CSS.escape(ev.id)}"]`);
-      if (old) old.replaceWith(block);
-      else addAbove(block);
-      wrapped = null;
+    case "block":
+      if (ev.replace) {
+        const block = richBlock(ev);
+        block.dataset.entry = ev.entry;
+        nodeOf(ev.entry)?.replaceWith(block);
+      } else {
+        const follows = win.next === scrollback.next;
+        scrollback.next = ev.entry + 1;
+        if (follows) push(ev.entry, richBlock(ev));
+      }
       break;
-    }
+    case "history":
+      scrollback = { first: ev.first, next: ev.next };
+      // Entries dropped by the core's cap leave the window too.
+      while (win.first < Math.min(scrollback.first, win.next)) {
+        upper.nextElementSibling.remove();
+        win.first++;
+      }
+      win = { first: Math.max(win.first, scrollback.first), next: Math.max(win.next, scrollback.first) };
+      break;
+    case "entries":
+      place(ev.entries);
+      break;
+    case "found":
+      found(ev);
+      break;
     case "title":
       if (config.dynamic_title) document.title = ev.title;
       break;
+  }
+}
+
+// Scrollback: the core keeps it whole; the page holds a window of it, entries
+// win.first..win.next, between two spacers that stand for the other entries
+// (see Spec-Scrollback in the wiki).
+
+const WINDOW = ratermWindow;
+// Entries asked for at once, when the view comes close to an end of the window.
+const CHUNK = 1000;
+let scrollback = { first: 0, next: 0 };
+let win = { first: 0, next: 0 };
+const upper = spacer();
+const lower = spacer();
+flow.prepend(upper);
+screen.before(lower);
+// The request in flight, and the entry to show at the top of the view once
+// a jump has loaded it.
+let pending = null;
+let jumpTo = null;
+
+function spacer() {
+  const div = document.createElement("div");
+  div.className = "spacer";
+  return div;
+}
+
+function lineNode(runs) {
+  const line = newLine();
+  line.append(...spans(runs));
+  return line;
+}
+
+/// Appends entry `n` to the window, which ends at the end of the scrollback.
+function push(n, node) {
+  // The core or coalesce skipped the entries that would not be shown.
+  if (n !== win.next) clearWindow(n);
+  node.dataset.entry = n;
+  lower.before(node);
+  win.next = n + 1;
+  if (win.next - win.first > WINDOW) {
+    upper.nextElementSibling.remove();
+    win.first++;
+  }
+}
+
+function clearWindow(n) {
+  const range = document.createRange();
+  range.setStartAfter(upper);
+  range.setEndBefore(lower);
+  range.deleteContents();
+  win = { first: n, next: n };
+}
+
+function nodeOf(n) {
+  if (n < win.first || n >= win.next) return null;
+  return flow.querySelector(`:scope > [data-entry="${n}"]`);
+}
+
+/// Height of an entry that is not loaded. One row: exact for most lines, and
+/// stable, so that the view does not jump as entries load. Smaller past the
+/// height an element can have.
+function rowHeight() {
+  return Math.min(cellHeight, 16e6 / Math.max(1, scrollback.next - scrollback.first));
+}
+
+function sizeSpacers() {
+  upper.style.height = `${(win.first - scrollback.first) * rowHeight()}px`;
+  lower.style.height = `${(scrollback.next - win.next) * rowHeight()}px`;
+}
+
+/// The entry or screen row at the top of the view, to keep in place while
+/// the window changes around it.
+function anchorAt() {
+  const box = flow.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + 4);
+  const node = hit?.closest("[data-entry], #screen > .line");
+  return node && { node, top: node.getBoundingClientRect().top };
+}
+
+/// The entry at height `y` of the view, or null within the window.
+function entryAt(y) {
+  const start = upper.getBoundingClientRect();
+  const end = lower.getBoundingClientRect();
+  if (y < start.bottom) return scrollback.first + Math.floor((y - start.top) / rowHeight());
+  if (y < end.top) return null;
+  if (y < end.bottom) return win.next + Math.floor((y - end.top) / rowHeight());
+  return scrollback.next;
+}
+
+/// Asks the core for the entries that the view shows or is about to show:
+/// next to the window, or in place of it when the view is far from it.
+function requestMore() {
+  if (pending || altOn || !cellHeight) return;
+  const view = flow.getBoundingClientRect();
+  const margin = 2 * view.height;
+  // With the screen at the top of the view, the last entries are next.
+  const at = Math.min(entryAt(view.top) ?? win.first, scrollback.next - 1);
+  if (at >= scrollback.first && (at < win.first - CHUNK || at >= win.next + CHUNK)) {
+    return request(Math.max(scrollback.first, at - CHUNK / 2), CHUNK, { jump: at });
+  }
+  if (win.first > scrollback.first && view.top < upper.getBoundingClientRect().bottom + margin) {
+    const from = Math.max(scrollback.first, win.first - CHUNK);
+    return request(from, win.first - from, { before: win.first });
+  }
+  if (win.next < scrollback.next && view.bottom > lower.getBoundingClientRect().top - margin) {
+    request(win.next, CHUNK, { after: win.next });
+  }
+}
+
+function request(from, count, what) {
+  pending = what;
+  send({ type: "entries", from, count });
+}
+
+/// Puts the entries the core sent in the window: next to it when they extend
+/// it, in place of it after a jump.
+function place(entries) {
+  const what = pending;
+  pending = null;
+  if (!what || !entries.length) return;
+  const nodes = entries.map(({ entry, line, block }) => {
+    const node = line ? lineNode(line.runs) : richBlock(block);
+    node.dataset.entry = entry;
+    return node;
+  });
+  const first = entries[0].entry;
+  const next = entries.at(-1).entry + 1;
+  if (what.before !== undefined) {
+    // The window may have moved since the request.
+    if (what.before !== win.first || next !== win.first) return;
+    upper.after(...nodes);
+    win.first = first;
+    while (win.next - win.first > WINDOW) {
+      lower.previousElementSibling.remove();
+      win.next--;
+    }
+  } else if (what.after !== undefined) {
+    if (what.after !== win.next || first !== win.next) return;
+    lower.before(...nodes);
+    win.next = next;
+    while (win.next - win.first > WINDOW) {
+      upper.nextElementSibling.remove();
+      win.first++;
+    }
+  } else {
+    clearWindow(first);
+    lower.before(...nodes);
+    win.next = next;
+    jumpTo = what.jump;
   }
 }
 
@@ -272,18 +460,6 @@ function collapseTrailing(grid) {
   }
 }
 
-// Scrollback lines and rich blocks above the screen. Counted: after a change,
-// flow.children.length walks the whole scrollback again.
-let above = 0;
-
-function addAbove(node) {
-  flow.insertBefore(node, screen);
-  if (++above > config.scrollback) {
-    flow.firstElementChild.remove();
-    above--;
-  }
-}
-
 function newLine() {
   const div = document.createElement("div");
   div.className = "line";
@@ -352,21 +528,31 @@ function cellText(text, cells) {
 // Whether the view follows new output. Only the user's scrolling changes it:
 // content growing on its own (images, iframes loading) does not fire scroll.
 let stick = true;
+let scrolled = false;
 flow.addEventListener("scroll", () => {
   stick = flow.scrollTop + flow.clientHeight >= flow.scrollHeight - 4;
+  if (scrolled) return;
+  scrolled = true;
+  requestAnimationFrame(() => {
+    scrolled = false;
+    requestMore();
+  });
 });
 
 function follow() {
   if (stick) toBottom();
 }
 
+/// Scrolls to the end; the last entries load if the window is elsewhere.
 function toBottom() {
   flow.scrollTop = flow.scrollHeight;
+  requestMore();
 }
 
 // Size
 
 let size = {};
+let cellHeight = 0;
 
 function resize() {
   const probe = newLine();
@@ -379,6 +565,8 @@ function resize() {
   const cell = probe.getBoundingClientRect();
   root.style.setProperty("--cell-height", `${cell.height}px`);
   probe.remove();
+  cellHeight = cell.height;
+  sizeSpacers();
   if (cell.width / 100 !== cellWidth) {
     cellWidth = cell.width / 100;
     glyphFits.clear();
@@ -523,8 +711,9 @@ function runAction(binding) {
 // selection, the focus nor the DOM change.
 
 const searchInput = searchBox.querySelector("input");
-let matches = [];
-let current = -1;
+// The current match: an entry of the scrollback or a row of the screen (see
+// Event::Found in term.rs), and offsets in its text; `show` until shown.
+let cur = null;
 
 function openSearch() {
   searchBox.hidden = false;
@@ -535,10 +724,11 @@ function openSearch() {
 function closeSearch() {
   searchBox.hidden = true;
   CSS.highlights.clear();
-  matches = [];
+  cur = null;
   input.focus();
 }
 
+/// Matches in the lines loaded in the page, all highlighted.
 function findAll(query) {
   const needle = query.toLowerCase();
   const found = [];
@@ -569,32 +759,46 @@ function rangeIn(el, start, end) {
   return range;
 }
 
-/// Moves to the previous (older) match, or the next one.
+/// Asks the core for the previous (older) match, or the next one, over the
+/// whole scrollback.
 function step(backwards) {
-  searchBox.classList.toggle("none", !matches.length && searchInput.value !== "");
-  if (!matches.length) return CSS.highlights.clear();
-  current = (current + (backwards ? -1 : 1) + matches.length) % matches.length;
-  CSS.highlights.set("search", new Highlight(...matches));
-  CSS.highlights.set("search-current", new Highlight(matches[current]));
-  matches[current].startContainer.parentElement.scrollIntoView({ block: "center" });
+  send({ type: "search", query: searchInput.value, entry: cur?.entry ?? null, at: cur?.start ?? 0, backwards });
+}
+
+function found(ev) {
+  searchBox.classList.toggle("none", ev.entry === null && searchInput.value !== "");
+  if (ev.entry === null) {
+    cur = null;
+    return CSS.highlights.clear();
+  }
+  cur = { entry: ev.entry, start: ev.start, end: ev.end, show: true };
+}
+
+/// Highlights the current match, loading the window around it if needed.
+function showMatch() {
+  const node = cur.entry >= scrollback.next ? screen.children[cur.entry - scrollback.next] : nodeOf(cur.entry);
+  if (!node) {
+    if (!pending) request(Math.max(scrollback.first, cur.entry - CHUNK / 2), CHUNK, { jump: cur.entry });
+    return;
+  }
+  cur.show = false;
+  CSS.highlights.set("search", new Highlight(...findAll(searchInput.value)));
+  CSS.highlights.set("search-current", new Highlight(rangeIn(node, cur.start, cur.end)));
+  node.scrollIntoView({ block: "center" });
+  // The scroll event comes later: new output must not bring the view back.
+  stick = false;
 }
 
 searchInput.addEventListener("input", () => {
-  matches = findAll(searchInput.value);
-  current = matches.length;
+  cur = null;
   step(true);
 });
 
 searchInput.addEventListener("keydown", (e) => {
   e.stopPropagation();
   if (e.key === "Escape") closeSearch();
-  else if (e.key === "Enter") {
-    // Output may have changed since the last search.
-    const at = current;
-    matches = findAll(searchInput.value);
-    current = Math.min(at, matches.length);
-    step(!e.shiftKey);
-  } else return;
+  else if (e.key === "Enter") step(!e.shiftKey);
+  else return;
   e.preventDefault();
 });
 

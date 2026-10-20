@@ -25,6 +25,7 @@ impl Session {
         let (pty, reader) = Pty::spawn(command, cols, rows)?;
         let mut term = Terminal::new(cols, rows);
         term.bold_is_bright = config.bold_is_bright;
+        term.history.cap = config.scrollback;
         let session = Session {
             pty: Mutex::new(pty),
             term: Mutex::new(term),
@@ -49,6 +50,11 @@ impl Session {
     pub fn paste(&self, text: &str) {
         let data = self.term.lock().unwrap().paste(text);
         self.input(data.as_bytes());
+    }
+
+    /// Answers a request of the page about the terminal (the scrollback).
+    pub fn query(&self, ask: impl FnOnce(&Terminal) -> Event, emit: impl FnOnce(Vec<Event>)) {
+        emit(vec![ask(&self.term.lock().unwrap())]);
     }
 
     pub fn resize(&self, cols: u16, rows: u16, emit: impl FnOnce(Vec<Event>)) {

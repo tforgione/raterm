@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     /// Program started in the terminal; defaults to `$SHELL`.
     pub shell: Option<String>,
-    /// Lines and blocks kept in the scrollback.
-    pub scrollback: usize,
+    /// Lines and blocks kept in the scrollback; unbounded by default.
+    pub scrollback: Option<usize>,
     /// Bold text in one of the 8 normal colors uses its bright variant.
     pub bold_is_bright: bool,
     /// The window title follows the title set by programs (OSC 0/2).
@@ -112,7 +112,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             shell: None,
-            scrollback: 10_000,
+            scrollback: None,
             bold_is_bright: false,
             dynamic_title: true,
             font: Font::default(),
@@ -206,7 +206,7 @@ mod tests {
         assert!(config.bold_is_bright);
         assert_eq!(config.font.family, "Ubuntu Mono");
         assert_eq!(config.font.size, Font::default().size);
-        assert_eq!(config.scrollback, 10_000);
+        assert_eq!(config.scrollback, None);
         assert_eq!(
             config.keys["ctrl+shift+e"],
             Binding::Action("new_window".into())

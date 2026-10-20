@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
@@ -10,6 +9,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use serde::Serialize;
 
+use crate::history::{self, Entry, History, Numbered, WINDOW};
 use crate::media::Media;
 use crate::rich::{Block, Filter, Piece, Rendered};
 
@@ -25,8 +25,10 @@ pub enum Event {
         height: usize,
         rows: Vec<Row>,
     },
-    /// A line that left the main screen by the top, to append to the scrollback.
+    /// A row that left the main screen by the top, to append to the
+    /// scrollback as `entry`; a soft-wrapped line continues the same entry.
     ScrollOut {
+        entry: u64,
         line: Line,
     },
     Alt {
@@ -38,13 +40,30 @@ pub enum Event {
     Title {
         title: String,
     },
-    /// A rich block, inserted in the flow before the screen, or replacing the
-    /// block with the same id.
+    /// A rich block, inserted in the flow before the screen as `entry`, or
+    /// replacing that entry, a block with the same id.
     Block {
+        entry: u64,
         #[serde(flatten)]
         block: Rendered,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         replace: bool,
+    },
+    /// Entries kept in the scrollback: `first..next`.
+    History {
+        first: u64,
+        next: u64,
+    },
+    /// Entries of the scrollback the page asked for.
+    Entries {
+        entries: Vec<Numbered>,
+    },
+    /// Next match of a search: an entry of the scrollback, or `next + y` for
+    /// row `y` of the screen; `None` when there is none.
+    Found {
+        entry: Option<u64>,
+        start: usize,
+        end: usize,
     },
 }
 
@@ -138,8 +157,9 @@ pub struct Terminal {
     filter: Filter,
     /// Local files shown by video blocks.
     pub media: Media,
-    /// Ids of the rich blocks inserted so far.
-    ids: HashSet<String>,
+    pub history: History,
+    /// Range of the history as last sent to the view.
+    sent_history: (u64, u64),
     /// Screen as last sent to the view.
     screen: Vec<Line>,
     alt: bool,
@@ -165,7 +185,8 @@ impl Terminal {
             term_events: rx,
             filter: Filter::default(),
             media: Media::default(),
-            ids: HashSet::new(),
+            history: History::default(),
+            sent_history: (0, 0),
             screen: Vec::new(),
             alt: false,
         }
@@ -198,6 +219,78 @@ impl Terminal {
         }
     }
 
+    /// Entries `from..from + count` of the scrollback.
+    pub fn entries(&self, from: u64, count: usize) -> Event {
+        Event::Entries {
+            entries: self.history.slice(from, count),
+        }
+    }
+
+    /// The match of `query` next to `from` (an entry and an offset in its
+    /// text, see `Event::Found`), going backwards or forwards over the lines of
+    /// the scrollback and of the screen, and wrapping around. Without `from`,
+    /// starts from the end, or from the beginning forwards.
+    pub fn search(&self, query: &str, from: Option<(u64, usize)>, backwards: bool) -> Event {
+        let needle = query.to_lowercase();
+        let (first, next) = (self.history.first(), self.history.next());
+        let end = next + self.screen.len() as u64;
+        let text = |n: u64| match self.history.get(n) {
+            Some(Entry::Line(line)) => Some(line.text()),
+            Some(Entry::Block(_)) => None,
+            None => self.screen.get((n - next) as usize).map(Line::text),
+        };
+        let from = from.filter(|(n, _)| (first..end).contains(n));
+        // An empty query matches nothing, rather than everywhere.
+        let len = if needle.is_empty() { 0 } else { end - first };
+        let start = match from {
+            Some((n, _)) => n - first,
+            None if backwards => len.saturating_sub(1),
+            None => 0,
+        };
+        let at = from.map(|(_, at)| at);
+        // The start entry comes again last, for its matches on the other side.
+        let visits = if at.is_some() { len + 1 } else { len };
+        for k in 0..visits {
+            let i = if backwards {
+                (start + len - k % len) % len
+            } else {
+                (start + k) % len
+            };
+            let Some(text) = text(first + i) else {
+                continue;
+            };
+            let ok = |&(s, _): &(usize, usize)| match at {
+                Some(at) if k == 0 => (s < at) == backwards && s != at,
+                Some(at) if k == len => {
+                    if backwards {
+                        s >= at
+                    } else {
+                        s <= at
+                    }
+                }
+                _ => true,
+            };
+            let found = history::matches(&text, &needle);
+            let found = if backwards {
+                found.into_iter().rev().find(ok)
+            } else {
+                found.into_iter().find(ok)
+            };
+            if let Some((start, end)) = found {
+                return Event::Found {
+                    entry: Some(first + i),
+                    start,
+                    end,
+                };
+            }
+        }
+        Event::Found {
+            entry: None,
+            start: 0,
+            end: 0,
+        }
+    }
+
     /// Screen content as plain text, for tests.
     pub fn text(&self) -> String {
         let grid = self.term.grid();
@@ -212,40 +305,60 @@ impl Terminal {
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
             return;
         }
-        let replace = block
-            .id
-            .as_ref()
-            .is_some_and(|id| !self.ids.insert(id.clone()));
+        let old = block.id.as_ref().and_then(|id| self.history.block(id));
         let block = match block.render(&self.media) {
             Ok(block) => block,
             Err(e) => return eprintln!("raterm: invalid rich block: {e}"),
         };
-        if !replace {
-            if self.term.grid().cursor.point.column.0 > 0 {
-                self.parser.advance(&mut self.term, b"\r\n");
-            }
-            let y = self.term.grid().cursor.point.line.0;
-            if y > 0 {
-                let scroll = format!("\x1b[{y}S\x1b[H");
-                self.parser.advance(&mut self.term, scroll.as_bytes());
-            }
-            self.drain_history(events);
+        if let Some(entry) = old {
+            self.history.replace(entry, Entry::Block(block.clone()));
+            return events.push(Event::Block {
+                entry,
+                block,
+                replace: true,
+            });
         }
-        events.push(Event::Block { block, replace });
+        if self.term.grid().cursor.point.column.0 > 0 {
+            self.parser.advance(&mut self.term, b"\r\n");
+        }
+        let y = self.term.grid().cursor.point.line.0;
+        if y > 0 {
+            let scroll = format!("\x1b[{y}S\x1b[H");
+            self.parser.advance(&mut self.term, scroll.as_bytes());
+        }
+        self.drain_history(events);
+        let entry = self.history.push(Entry::Block(block.clone()));
+        events.push(Event::Block {
+            entry,
+            block,
+            replace: false,
+        });
     }
 
-    /// Emits the lines that scrolled out of the main screen.
+    /// Moves the rows that scrolled out of the main screen to the scrollback,
+    /// and emits the last `WINDOW` entries of them: the page would drop the
+    /// older ones before showing them.
     ///
     /// The alternate grid has no history, so this only ever drains the main
     /// screen; lines pushed while the alternate screen is active show up on
     /// exit, which is still the right place in the flow.
     fn drain_history(&mut self, events: &mut Vec<Event>) {
         let grid = self.term.grid();
-        for i in (1..=grid.history_size() as i32).rev() {
-            let line = self.render(&grid[GridLine(-i)], None);
-            events.push(Event::ScrollOut { line });
-        }
+        let rows: Vec<Line> = (1..=grid.history_size() as i32)
+            .rev()
+            .map(|i| self.render(&grid[GridLine(-i)], None))
+            .collect();
         self.term.grid_mut().clear_history();
+        let rows: Vec<(u64, Line)> = rows
+            .into_iter()
+            .map(|line| (self.history.push_row(line.clone()), line))
+            .collect();
+        let shown = self.history.next().saturating_sub(WINDOW as u64);
+        events.extend(
+            rows.into_iter()
+                .filter(|&(entry, _)| entry >= shown)
+                .map(|(entry, line)| Event::ScrollOut { entry, line }),
+        );
     }
 
     fn update(&mut self, events: Vec<Event>) -> Update {
@@ -302,6 +415,12 @@ impl Terminal {
             update.events.push(Event::Lines { height, rows });
         }
         self.screen = screen;
+        let range = (self.history.first(), self.history.next());
+        if range != self.sent_history {
+            self.sent_history = range;
+            let (first, next) = range;
+            update.events.push(Event::History { first, next });
+        }
         update
     }
 
@@ -469,7 +588,7 @@ mod tests {
         events
             .iter()
             .filter_map(|e| match e {
-                Event::ScrollOut { line } => Some(line.text()),
+                Event::ScrollOut { line, .. } => Some(line.text()),
                 _ => None,
             })
             .collect()
@@ -528,7 +647,7 @@ mod tests {
     fn soft_wrap_is_flagged() {
         let mut term = Terminal::new(4, 1);
         let update = term.advance(b"abcdef");
-        let [Event::ScrollOut { line }, ..] = &update.events[..] else {
+        let [Event::ScrollOut { line, .. }, ..] = &update.events[..] else {
             panic!()
         };
         assert!(line.wrap);
@@ -539,7 +658,7 @@ mod tests {
         events
             .iter()
             .filter_map(|e| match e {
-                Event::ScrollOut { line } => Some(line.text()),
+                Event::ScrollOut { line, .. } => Some(line.text()),
                 Event::Block { replace, .. } => Some(format!("block {replace}")),
                 _ => None,
             })
@@ -641,6 +760,92 @@ mod tests {
             panic!()
         };
         assert_eq!(rows[0].line.runs[0].style.fg.as_deref(), Some("var(--c9)"));
+    }
+
+    #[test]
+    fn scrollback_entries_are_numbered_and_kept() {
+        let mut term = Terminal::new(4, 1);
+        let update = term.advance(b"abcdef\r\ng\r\nh");
+        let entries: Vec<u64> = update
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ScrollOut { entry, .. } => Some(*entry),
+                _ => None,
+            })
+            .collect();
+        // "abcd" soft-wraps: "ef" continues entry 0.
+        assert_eq!(entries, [0, 0, 1]);
+        assert_eq!(
+            update.events.last(),
+            Some(&Event::History { first: 0, next: 2 })
+        );
+        let Event::Entries { entries } = term.entries(0, 10) else {
+            panic!()
+        };
+        let texts: Vec<_> = entries
+            .iter()
+            .map(|e| match &e.item {
+                Entry::Line(line) => line.text(),
+                Entry::Block(_) => panic!(),
+            })
+            .collect();
+        assert_eq!(texts, ["abcdef", "g"]);
+    }
+
+    #[test]
+    fn a_flood_sends_only_the_last_window() {
+        let mut term = Terminal::new(10, 1);
+        let flood = "x\r\n".repeat(WINDOW + 10);
+        let update = term.advance(flood.as_bytes());
+        let sent: Vec<u64> = update
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ScrollOut { entry, .. } => Some(*entry),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sent.len(), WINDOW);
+        assert_eq!(sent[0], 10);
+        assert_eq!(term.history.next(), (WINDOW + 10) as u64);
+    }
+
+    #[test]
+    fn a_dropped_block_is_inserted_again() {
+        let mut term = Terminal::new(10, 2);
+        term.history.cap = Some(1);
+        term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
+        term.advance(b"a\r\nb\r\nc");
+        let update = term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
+        assert!(matches!(
+            update.events[..],
+            [.., Event::Block { replace: false, .. }, _, _]
+        ));
+    }
+
+    fn found(event: Event) -> Option<(u64, usize)> {
+        match event {
+            Event::Found { entry, start, .. } => entry.map(|n| (n, start)),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn search_goes_through_scrollback_and_screen_and_wraps() {
+        let mut term = Terminal::new(10, 2);
+        term.advance(b"a x\r\nb\r\nx x\r\n$ ");
+        // Entries 0 "a x" and 1 "b"; the screen is "x x" (2), then "$ " (3).
+        let last = found(term.search("X", None, true));
+        assert_eq!(last, Some((2, 2)));
+        let back = found(term.search("x", last, true));
+        assert_eq!(back, Some((2, 0)));
+        let back = found(term.search("x", back, true));
+        assert_eq!(back, Some((0, 2)));
+        assert_eq!(found(term.search("x", back, true)), last);
+        assert_eq!(found(term.search("x", last, false)), Some((0, 2)));
+        assert_eq!(found(term.search("nope", None, true)), None);
+        assert_eq!(found(term.search("", None, true)), None);
     }
 
     #[test]

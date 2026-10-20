@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::thread;
 
 use raterm::config::{self, Config};
+use raterm::history;
 use raterm::media;
 use raterm::pty::Error;
 use raterm::session::Session;
@@ -42,6 +43,18 @@ enum Message {
     /// Paste the primary selection (middle click, shift+insert).
     PastePrimary,
     NewWindow,
+    /// Entries `from..from + count` of the scrollback.
+    Entries {
+        from: u64,
+        count: usize,
+    },
+    /// The match of `query` next to offset `at` of `entry`.
+    Search {
+        query: String,
+        entry: Option<u64>,
+        at: usize,
+        backwards: bool,
+    },
 }
 
 /// Opens the terminal window, running `command` with `title` as the window
@@ -52,9 +65,10 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let media = media::serve(session.media())?;
     // Served as a script so that the page has it before app.js runs.
     let config_js = format!(
-        "const ratermConfig = {};\nconst ratermMedia = {};",
+        "const ratermConfig = {};\nconst ratermMedia = {};\nconst ratermWindow = {};",
         serde_json::to_string(&config)?,
         serde_json::to_string(&media.base)?,
+        history::WINDOW,
     );
     // Rich blocks inherit this policy: they can show inline styles and data:
     // images, but never load anything from the network; videos of local files
@@ -114,6 +128,18 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 });
             }
             Ok(Message::NewWindow) => new_window(session.cwd()),
+            Ok(Message::Entries { from, count }) => {
+                session.query(|term| term.entries(from, count), |e| send(&proxy, &e))
+            }
+            Ok(Message::Search {
+                query,
+                entry,
+                at,
+                backwards,
+            }) => session.query(
+                |term| term.search(&query, entry.map(|n| (n, at)), backwards),
+                |e| send(&proxy, &e),
+            ),
             Err(e) => eprintln!("raterm: bad ipc message: {e}"),
         })
         .build_gtk(window.default_vbox().ok_or("no GTK container")?)?;

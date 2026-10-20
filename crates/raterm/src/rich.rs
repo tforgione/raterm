@@ -45,7 +45,7 @@ pub struct Block {
 }
 
 /// A block as sent to the view.
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Rendered {
     pub kind: Kind,
     /// HTML for `html` and `md`, a data URL for `svg` and `img`, a data URL
