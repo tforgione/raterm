@@ -4,6 +4,8 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use serde::Serialize;
 
+use crate::media::Media;
+
 /// Maximum size of a sequence payload; larger blocks are dropped.
 pub const MAX_PAYLOAD: usize = 8 << 20;
 const PREFIX: &[u8] = b"\x1b]7117;";
@@ -24,6 +26,7 @@ pub enum Kind {
     Md,
     Svg,
     Img,
+    Video,
 }
 
 #[derive(Debug, PartialEq)]
@@ -33,6 +36,8 @@ pub struct Block {
     pub width: Option<u16>,
     pub height: Option<u16>,
     pub mime: Option<String>,
+    /// `src=path`: `data` is the absolute path of a local file, not its bytes.
+    pub path: bool,
     pub data: Vec<u8>,
 }
 
@@ -40,7 +45,8 @@ pub struct Block {
 #[derive(Debug, PartialEq, Serialize)]
 pub struct Rendered {
     pub kind: Kind,
-    /// HTML for `html` and `md`, a data URL for `svg` and `img`.
+    /// HTML for `html` and `md`, a data URL for `svg` and `img`, a data URL
+    /// or `media/<n>` (a file of the media server) for `video`.
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -165,6 +171,7 @@ fn parse(payload: &[u8]) -> Result<Block, String> {
         "md" => Kind::Md,
         "svg" => Kind::Svg,
         "img" => Kind::Img,
+        "video" => Kind::Video,
         other => return Err(format!("unknown kind {other:?}")),
     };
     let mut block = Block {
@@ -173,6 +180,7 @@ fn parse(payload: &[u8]) -> Result<Block, String> {
         width: None,
         height: None,
         mime: None,
+        path: false,
         data: STANDARD.decode(data.trim()).map_err(|e| e.to_string())?,
     };
     for param in &parts[1..] {
@@ -183,6 +191,8 @@ fn parse(payload: &[u8]) -> Result<Block, String> {
             "w" => block.width = Some(number()?),
             "h" => block.height = Some(number()?),
             "mime" => block.mime = Some(value.to_owned()),
+            "src" if value == "path" => block.path = true,
+            "src" => return Err(format!("bad src: {value:?}")),
             _ => {} // unknown keys are reserved for later versions
         }
     }
@@ -190,7 +200,9 @@ fn parse(payload: &[u8]) -> Result<Block, String> {
 }
 
 impl Block {
-    pub fn render(self) -> Result<Rendered, String> {
+    /// Renders the block; local files of `src=path` videos are registered in
+    /// `media`, which the view serves them from.
+    pub fn render(self, media: &Media) -> Result<Rendered, String> {
         let (content, text) = match self.kind {
             Kind::Html => (String::from_utf8_lossy(&self.data).into_owned(), None),
             Kind::Md => {
@@ -203,19 +215,19 @@ impl Block {
                 (comrak::markdown_to_html(&source, &options), Some(source))
             }
             Kind::Svg => (data_url("image/svg+xml", &self.data), None),
-            Kind::Img => {
-                let mime = self.mime.as_deref().ok_or("img without mime")?;
-                let valid = mime.strip_prefix("image/").is_some_and(|sub| {
-                    !sub.is_empty()
-                        && sub
-                            .bytes()
-                            .all(|c| c.is_ascii_alphanumeric() || b".+-".contains(&c))
-                });
-                if !valid {
-                    return Err(format!("bad image mime {mime:?}"));
+            Kind::Img => (data_url(mime(&self, "image/")?, &self.data), None),
+            Kind::Video if self.path => {
+                let mime = mime(&self, "video/")?.to_owned();
+                let path = std::path::PathBuf::from(String::from_utf8_lossy(&self.data).as_ref());
+                if !path.is_absolute() || !path.is_file() {
+                    return Err(format!(
+                        "not an absolute path to a file: {}",
+                        path.display()
+                    ));
                 }
-                (data_url(mime, &self.data), None)
+                (media.add(path, mime), None)
             }
+            Kind::Video => (data_url(mime(&self, "video/")?, &self.data), None),
         };
         Ok(Rendered {
             kind: self.kind,
@@ -226,6 +238,20 @@ impl Block {
             text,
         })
     }
+}
+
+/// The block's MIME type, which must be `prefix` (`image/`...) and a subtype.
+fn mime<'a>(block: &'a Block, prefix: &str) -> Result<&'a str, String> {
+    let mime = block.mime.as_deref().ok_or("no mime")?;
+    let valid = mime.strip_prefix(prefix).is_some_and(|sub| {
+        !sub.is_empty()
+            && sub
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b".+-".contains(&c))
+    });
+    valid
+        .then_some(mime)
+        .ok_or_else(|| format!("bad mime {mime:?}"))
 }
 
 fn data_url(mime: &str, data: &[u8]) -> String {
@@ -243,6 +269,7 @@ mod tests {
             width: None,
             height: None,
             mime: None,
+            path: false,
             data: data.to_vec(),
         })
     }
@@ -314,7 +341,7 @@ mod tests {
         let Piece::Block(b) = block(Kind::Md, b"|a|b|\n|-|-|\n|1|2|\n") else {
             unreachable!()
         };
-        let rendered = b.render().unwrap();
+        let rendered = b.render(&Media::default()).unwrap();
         assert!(rendered.content.contains("<table>"));
         assert_eq!(rendered.text.as_deref(), Some("|a|b|\n|-|-|\n|1|2|\n"));
     }
@@ -324,8 +351,23 @@ mod tests {
         let Piece::Block(b) = block(Kind::Md, b"see https://example.com\n") else {
             unreachable!()
         };
-        let html = b.render().unwrap().content;
+        let html = b.render(&Media::default()).unwrap().content;
         assert!(html.contains(r#"<a href="https://example.com">"#), "{html}");
+    }
+
+    #[test]
+    fn local_videos_are_registered_not_inlined() {
+        let path = std::env::current_exe().unwrap();
+        let payload = format!(
+            "video;mime=video/mp4;src=path;{}",
+            STANDARD.encode(path.to_str().unwrap())
+        );
+        let block = parse(payload.as_bytes()).unwrap();
+        let media = Media::default();
+        assert_eq!(block.render(&media).unwrap().content, "media/0");
+        assert_eq!(media.get(0).unwrap(), (path, "video/mp4".to_owned()));
+        let relative = format!("video;mime=video/mp4;src=path;{}", STANDARD.encode("a.mp4"));
+        assert!(parse(relative.as_bytes()).unwrap().render(&media).is_err());
     }
 
     #[test]
@@ -336,13 +378,14 @@ mod tests {
             width: None,
             height: None,
             mime: Some(mime.into()),
+            path: false,
             data: vec![1, 2],
         };
         assert_eq!(
-            img("image/png").render().unwrap().content,
+            img("image/png").render(&Media::default()).unwrap().content,
             "data:image/png;base64,AQI="
         );
-        assert!(img("text/html").render().is_err());
-        assert!(img("image/png\"onerror").render().is_err());
+        assert!(img("text/html").render(&Media::default()).is_err());
+        assert!(img("image/png\"onerror").render(&Media::default()).is_err());
     }
 }

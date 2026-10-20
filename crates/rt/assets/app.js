@@ -110,6 +110,19 @@ function richBlock(ev) {
   if (ev.text) div.dataset.text = ev.text;
   if (ev.w) div.style.maxWidth = `${ev.w}ch`;
   let lines = ev.h;
+  if (ev.kind === "video") {
+    const video = document.createElement("video");
+    video.controls = true;
+    video.preload = "metadata";
+    video.addEventListener("loadedmetadata", follow);
+    // Local files are streamed by rt's media server, the rest are data: URLs.
+    video.src = ev.content.startsWith("media/") ? rtMedia + ev.content.slice("media/".length) : ev.content;
+    const limit = config.images.max_height;
+    if (limit) lines = Math.min(lines ?? limit, limit);
+    if (lines) video.style.maxHeight = `${lines}lh`;
+    div.append(video);
+    return div;
+  }
   if (ev.kind === "img" || ev.kind === "svg") {
     // An SVG loaded as an image never runs scripts nor fetches resources.
     const img = document.createElement("img");

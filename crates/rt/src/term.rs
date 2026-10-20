@@ -10,6 +10,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use serde::Serialize;
 
+use crate::media::Media;
 use crate::rich::{Block, Filter, Piece, Rendered};
 
 /// History is drained after every batch, so it only needs to hold the lines
@@ -105,6 +106,8 @@ pub struct Terminal {
     parser: Processor,
     term_events: Receiver<TermEvent>,
     filter: Filter,
+    /// Local files shown by video blocks.
+    pub media: Media,
     /// Ids of the rich blocks inserted so far.
     ids: HashSet<String>,
     /// Screen as last sent to the view.
@@ -127,6 +130,7 @@ impl Terminal {
             parser: Processor::new(),
             term_events: rx,
             filter: Filter::default(),
+            media: Media::default(),
             ids: HashSet::new(),
             screen: Vec::new(),
             alt: false,
@@ -179,7 +183,7 @@ impl Terminal {
             .id
             .as_ref()
             .is_some_and(|id| !self.ids.insert(id.clone()));
-        let block = match block.render() {
+        let block = match block.render(&self.media) {
             Ok(block) => block,
             Err(e) => return eprintln!("rt: invalid rich block: {e}"),
         };

@@ -38,6 +38,10 @@ impl Session {
         }
     }
 
+    pub fn media(&self) -> crate::media::Media {
+        self.term.lock().unwrap().media.clone()
+    }
+
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
         self.pty.lock().unwrap().cwd()
     }

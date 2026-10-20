@@ -54,6 +54,7 @@ ESC ] 7117 ; <kind> [; <k>=<v> ...] ; <base64> BEL
 | `md` | Markdown (CommonMark + tables GFM) | converti en HTML côté Rust avec `comrak`, puis comme `html` |
 | `svg` | document SVG | inséré inline, dimensionné à la largeur du terminal si pas de `w` |
 | `img` | `mime=<type>` + octets | balise `<img>` avec data URL, redimensionnée à la largeur du terminal |
+| `video` | `mime=<type>` + octets, ou `src=path` + chemin absolu d'un fichier local | balise `<video>` avec contrôles ; un fichier local est servi par le serveur média de `rt` (voir sécurité) |
 
 Sémantique :
 
@@ -64,6 +65,8 @@ Sémantique :
 - Le bloc fait partie du scrollback : il est sélectionnable, copiable (comme texte brut pour `md`, comme image pour `img`/`svg`) et conservé dans l'export de session.
 
 Sécurité : le HTML n'est pas exécuté dans la page du terminal elle-même. Chaque bloc `html`/`md`/`svg` est rendu dans un `<iframe sandbox>` sans `allow-scripts`, avec `srcdoc` et une feuille de style injectée, redimensionné à la hauteur de son contenu via `ResizeObserver` dans la page parente. Un programme qui écrit dans le terminal ne doit jamais pouvoir exécuter du JavaScript dans le processus `rt`. Les `<a href>` sont ouverts via `xdg-open` par le cœur Rust, jamais dans la webview.
+
+Vidéos : le lecteur de WebKitGTK passe par GStreamer (il faut `gst-plugins-good`, et `gst-libav` pour H.264) et ne lit que des URL http(s), `data:` ou `blob:`, ni `rt://` ni `file://`. Pour lire un fichier local de toute taille avec avance rapide, `rt` lance un petit serveur HTTP sur `127.0.0.1` (port aléatoire) qui ne sert que les fichiers annoncés par un bloc `video` avec `src=path`, par index, sous un jeton aléatoire de 128 bits, avec les requêtes `Range`. La CSP n'autorise que ce serveur comme source de médias. `rat` envoie le chemin pour un fichier local et le contenu en base64 depuis stdin ou en ssh (`SSH_CONNECTION`), où le chemin désignerait la machine distante.
 
 Détection côté programme : `rt` exporte `RT_TERM=1` et `TERM_PROGRAM=rt` dans l'environnement du shell. `rat` et tout script compatible testent cette variable et se replient sur du texte brut sinon. `TERM` reste `xterm-256color` pour que les programmes existants fonctionnent.
 
@@ -117,6 +120,7 @@ Second binaire du même workspace Cargo, sans dépendance à wry. Il lit un fich
 | `rat fichier.md` ou `rat --md -` | `md` | le Markdown brut |
 | `rat page.html` ou `--html` | `html` | le HTML brut |
 | `rat image.png` (png, jpg, gif, webp) | `img` | le chemin du fichier |
+| `rat video.mp4` (mp4, webm, mkv, ogv) | `video` | le chemin du fichier |
 | `rat dessin.svg` | `svg` | le chemin du fichier |
 
 Options : `--width N`, `--height N`, `--id NOM` (mappées sur les clés du protocole), `--force` pour émettre la séquence même sans `RT_TERM`.

@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::thread;
 
 use rt::config::{self, Config};
+use rt::media;
 use rt::pty::Error;
 use rt::session::Session;
 use rt::term::Event as TermEvent;
@@ -11,7 +12,8 @@ use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
-use wry::http::{Response, header::CONTENT_TYPE};
+use wry::http::Response;
+use wry::http::header::CONTENT_TYPE;
 use wry::{PageLoadEvent, WebViewBuilder, WebViewBuilderExtUnix};
 
 enum UserEvent {
@@ -47,8 +49,21 @@ enum Message {
 pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
     let (session, reader) = Session::spawn(&config, command, 80, 24)?;
     let reader = RefCell::new(Some(reader));
+    let media = media::serve(session.media())?;
     // Served as a script so that the page has it before app.js runs.
-    let config_js = format!("const rtConfig = {};", serde_json::to_string(&config)?);
+    let config_js = format!(
+        "const rtConfig = {};\nconst rtMedia = {};",
+        serde_json::to_string(&config)?,
+        serde_json::to_string(&media.base)?,
+    );
+    // Rich blocks inherit this policy: they can show inline styles and data:
+    // images, but never load anything from the network; videos of local files
+    // come from rt's own server.
+    let csp = format!(
+        "default-src 'self'; img-src 'self' data:; media-src data: {}; \
+         style-src 'self' 'unsafe-inline'; frame-src 'self' http: https: mailto:",
+        media.origin
+    );
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
@@ -62,7 +77,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let title_proxy = proxy.clone();
     let webview = WebViewBuilder::new()
         .with_custom_protocol("rt".into(), move |_, req| {
-            serve(req.uri().path(), &config_js)
+            serve(req.uri().path(), &config_js, &csp)
         })
         .with_url("rt://app/")
         .with_clipboard(true)
@@ -170,7 +185,7 @@ fn new_window(cwd: Option<std::path::PathBuf>) {
     }
 }
 
-fn serve(path: &str, config_js: &str) -> Response<Cow<'static, [u8]>> {
+fn serve(path: &str, config_js: &str, csp: &str) -> Response<Cow<'static, [u8]>> {
     let (body, mime): (Cow<'static, [u8]>, _) = match path {
         "/" | "/index.html" => (include_bytes!("../assets/index.html").into(), "text/html"),
         "/style.css" => (include_bytes!("../assets/style.css").into(), "text/css"),
@@ -192,13 +207,7 @@ fn serve(path: &str, config_js: &str) -> Response<Cow<'static, [u8]>> {
     };
     Response::builder()
         .header(CONTENT_TYPE, mime)
-        // Rich blocks inherit this policy: they can show inline styles and
-        // data: images, but never load anything from the network.
-        .header(
-            "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
-             frame-src 'self' http: https: mailto:",
-        )
+        .header("Content-Security-Policy", csp)
         .body(body)
         .unwrap()
 }

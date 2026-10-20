@@ -147,6 +147,11 @@ html, body {
   cursor: zoom-in;
 }
 
+.rich video {
+  display: block;
+  max-width: 100%;
+}
+
 .rich.svg img {
   width: 100%;
 }
