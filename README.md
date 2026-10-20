@@ -84,11 +84,18 @@ rat --md -            # from stdin
 | `--md`, `--html`, `--svg`, `--img`, `--video` | kind of the input, instead of guessing from the extension |
 | `--width N`, `--height N` | maximum size, in columns and lines |
 | `--id NAME` | replace the previous block with the same id (progress bars, tables that fill up) |
+| `--allow-network` | download the http(s) images of a Markdown file, to inline them |
 | `--force` | emit the block even when not running in raterm |
 
 Images can be PNG, JPEG, GIF or WebP; videos MP4, WebM, MKV or OGV. A local
 video is sent by path, so it can be of any size; from stdin it is sent whole
 (8 MiB at most). Over ssh, `rat` refuses to send videos.
+
+Images in Markdown files are inlined by `rat` as `data:` URLs, since blocks
+can neither read files nor access the network: local images (paths relative
+to the Markdown file), and with `--allow-network` http(s) images, which `rat`
+downloads itself (raterm never accesses the network). Code blocks and code
+spans are left alone.
 
 Outside raterm, `rat` prints Markdown and HTML as is, and the path of images
 and videos. Note that ssh does not forward `RATERM` by default: on a remote

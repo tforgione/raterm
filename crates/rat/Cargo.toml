@@ -7,3 +7,4 @@ license.workspace = true
 [dependencies]
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
+ureq = "3"

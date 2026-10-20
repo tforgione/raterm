@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
@@ -43,6 +44,10 @@ struct Args {
     /// Replace the previous block with the same id.
     #[arg(long, value_name = "NAME")]
     id: Option<String>,
+    /// Download the http(s) images of Markdown files, to inline them like
+    /// local ones (raterm itself never accesses the network).
+    #[arg(long)]
+    allow_network: bool,
     /// Emit the block even when not running in raterm.
     #[arg(long)]
     force: bool,
@@ -128,6 +133,13 @@ fn run(args: Args) -> Result<(), String> {
         let payload = if by_path {
             let path = std::fs::canonicalize(&args.file).map_err(error)?;
             STANDARD.encode(path.as_os_str().as_encoded_bytes())
+        } else if kind == "md" {
+            let dir = match args.file.parent() {
+                Some(dir) if !stdin && !dir.as_os_str().is_empty() => dir,
+                _ => Path::new("."),
+            };
+            let markdown = String::from_utf8_lossy(&data);
+            STANDARD.encode(inline_images(&markdown, dir, args.allow_network))
         } else {
             STANDARD.encode(&data)
         };
@@ -157,6 +169,110 @@ fn run(args: Args) -> Result<(), String> {
     written.and_then(|_| out.flush()).map_err(|e| e.to_string())
 }
 
+/// Markdown with its images inlined as data: URLs: blocks can neither read
+/// files nor access the network, and paths only make sense where rat runs
+/// (maybe over ssh). Code blocks and code spans are left alone.
+fn inline_images(markdown: &str, dir: &Path, network: bool) -> String {
+    let mut out = String::with_capacity(markdown.len());
+    let mut fence = None;
+    for line in markdown.split_inclusive('\n') {
+        let marker = ["```", "~~~"]
+            .into_iter()
+            .find(|m| line.trim_start().starts_with(m));
+        match (fence, marker) {
+            (None, Some(marker)) => fence = Some(marker),
+            (Some(open), Some(marker)) if open == marker => fence = None,
+            (Some(_), _) => {}
+            (None, None) => {
+                // Splitting on backticks, odd pieces are code spans.
+                for (i, piece) in line.split('`').enumerate() {
+                    if i > 0 {
+                        out.push('`');
+                    }
+                    if i % 2 == 0 {
+                        out += &inline_in_text(piece, dir, network);
+                    } else {
+                        out += piece;
+                    }
+                }
+                continue;
+            }
+        }
+        out += line;
+    }
+    out
+}
+
+/// Replaces the destination of each `![alt](destination)` in `text`.
+fn inline_in_text(text: &str, dir: &Path, network: bool) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("![") {
+        let Some(open) = rest[start..].find("](").map(|i| start + i + 2) else {
+            break;
+        };
+        out += &rest[..open];
+        rest = &rest[open..];
+        // `<path with spaces>`, or up to a space (before a title) or `)`.
+        let (dest, len) = match rest.strip_prefix('<').and_then(|r| r.split_once('>')) {
+            Some((dest, _)) => (dest, dest.len() + 2),
+            None => {
+                let end = rest
+                    .find(|c: char| c == ')' || c.is_whitespace())
+                    .unwrap_or(rest.len());
+                (&rest[..end], end)
+            }
+        };
+        match image_data_url(dir, dest, network) {
+            Some(url) => out += &url,
+            None => out += &rest[..len],
+        }
+        rest = &rest[len..];
+    }
+    out + rest
+}
+
+/// An image as a data: URL: a local file, or with `network` an http(s) URL.
+/// `None` (with a warning) for what cannot be read, and other URLs.
+fn image_data_url(dir: &Path, dest: &str, network: bool) -> Option<String> {
+    let remote = dest.starts_with("http://") || dest.starts_with("https://");
+    if dest.is_empty() || (remote && !network) || (!remote && dest.contains(':')) {
+        return None;
+    }
+    let read = if remote {
+        download(dest).map_err(|e| e.to_string())
+    } else {
+        std::fs::read(dir.join(dest))
+            .map(|data| (data, None))
+            .map_err(|e| e.to_string())
+    };
+    let (data, content_type) = read
+        .inspect_err(|e| eprintln!("rat: image {dest}: {e}"))
+        .ok()?;
+    let svg = dest.to_ascii_lowercase().ends_with(".svg")
+        || content_type.as_deref() == Some("image/svg+xml");
+    let mime = sniff(&data)
+        .filter(|mime| mime.starts_with("image/"))
+        .or(svg.then_some("image/svg+xml"))?;
+    Some(format!("data:{mime};base64,{}", STANDARD.encode(&data)))
+}
+
+/// Downloads `url`, returning its body and content type.
+fn download(url: &str) -> Result<(Vec<u8>, Option<String>), ureq::Error> {
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(10)))
+        .build()
+        .into();
+    let mut response = agent.get(url).call()?;
+    let content_type = response.body().mime_type().map(String::from);
+    let data = response
+        .body_mut()
+        .with_config()
+        .limit(MAX_PAYLOAD as u64)
+        .read_to_vec()?;
+    Ok((data, content_type))
+}
+
 /// Image or video MIME type from the file's magic bytes.
 fn sniff(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(b"\x89PNG") {
@@ -176,5 +292,29 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
         Some("video/ogg")
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_images_are_inlined_outside_code() {
+        let dir = std::env::temp_dir().join(format!("rat-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a b.png"), b"\x89PNG").unwrap();
+        std::fs::write(dir.join("c.png"), b"\x89PNG").unwrap();
+        let png = "data:image/png;base64,iVBORw==";
+        let md = "x ![a](c.png \"title\") ![b](<a b.png>) ![c](https://e.org/i.png)\n\
+                  `![d](c.png)`\n```\n![e](c.png)\n```\n![f](missing.png)\n";
+        assert_eq!(
+            inline_images(md, &dir, false),
+            format!(
+                "x ![a]({png} \"title\") ![b]({png}) ![c](https://e.org/i.png)\n\
+                 `![d](c.png)`\n```\n![e](c.png)\n```\n![f](missing.png)\n"
+            )
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }
