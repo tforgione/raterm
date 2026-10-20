@@ -30,9 +30,8 @@ struct Args {
     /// Treat the input as an image (png, jpg, gif or webp).
     #[arg(long)]
     img: bool,
-    /// Treat the input as a video (mp4, webm, mkv or ogv). A local file is
-    /// sent by path, so it can be of any size; stdin or a file over ssh is
-    /// sent whole, like other blocks.
+    /// Treat the input as a video (mp4, webm, mkv or ogv). A file is sent by
+    /// path, so it can be of any size, stdin is sent whole; refused over ssh.
     #[arg(long)]
     video: bool,
     /// Maximum width, in columns.
@@ -92,9 +91,15 @@ fn run(args: Args) -> Result<(), String> {
         }
     };
 
+    let in_rt = std::env::var_os("RT_TERM").is_some();
+    let emit = in_rt || args.force;
+    // Over ssh, rt cannot read a remote file by path, and sending the video
+    // whole would push megabytes through the connection.
+    if emit && kind == "video" && std::env::var_os("SSH_CONNECTION").is_some() {
+        return Err("videos cannot be shown over ssh".into());
+    }
     // A local video is sent by path: rt reads it itself, so it can be large.
-    // Over ssh, the path would name a file on the remote machine.
-    let by_path = kind == "video" && !stdin && std::env::var_os("SSH_CONNECTION").is_none();
+    let by_path = kind == "video" && !stdin;
     let error = |e: io::Error| format!("{}: {e}", args.file.display());
     let data = if stdin {
         let mut data = Vec::new();
@@ -119,8 +124,7 @@ fn run(args: Args) -> Result<(), String> {
     };
 
     let mut out = io::stdout().lock();
-    let in_rt = std::env::var_os("RT_TERM").is_some();
-    let written = if in_rt || args.force {
+    let written = if emit {
         let payload = if by_path {
             let path = std::fs::canonicalize(&args.file).map_err(error)?;
             STANDARD.encode(path.as_os_str().as_encoded_bytes())
