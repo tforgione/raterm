@@ -63,9 +63,11 @@ html, body {
 }
 
 .line {
-  /* The font's own line height, without extra spacing: box drawing and
-     block characters are designed to touch the lines above and below. */
-  line-height: normal;
+  /* The font's own line height (measured by app.js), without extra spacing:
+     box drawing and block characters are designed to touch the lines above
+     and below. Fixed, as with "normal" a glyph from a taller fallback font
+     would make its line taller. */
+  line-height: var(--cell-height, normal);
   min-height: 1lh;
   white-space: pre-wrap;
   word-break: break-all;

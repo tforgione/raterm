@@ -298,9 +298,12 @@ function resize() {
   const probe = newLine();
   probe.style.position = "absolute";
   probe.style.visibility = "hidden";
+  // The font's natural line height, which lines are then fixed to.
+  probe.style.lineHeight = "normal";
   probe.textContent = "X".repeat(100);
   document.body.append(probe);
   const cell = probe.getBoundingClientRect();
+  root.style.setProperty("--cell-height", `${cell.height}px`);
   probe.remove();
   if (cell.width / 100 !== cellWidth) {
     cellWidth = cell.width / 100;
