@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
@@ -8,6 +9,8 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use serde::Serialize;
+
+use crate::rich::{Block, Filter, Piece, Rendered};
 
 /// History is drained after every batch, so it only needs to hold the lines
 /// that can scroll out during one batch (at most one per input byte).
@@ -30,6 +33,14 @@ pub enum Event {
     },
     Mode {
         app_cursor: bool,
+    },
+    /// A rich block, inserted in the flow before the screen, or replacing the
+    /// block with the same id.
+    Block {
+        #[serde(flatten)]
+        block: Rendered,
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        replace: bool,
     },
 }
 
@@ -84,6 +95,9 @@ pub struct Terminal {
     term: Term<Listener>,
     parser: Processor,
     term_events: Receiver<TermEvent>,
+    filter: Filter,
+    /// Ids of the rich blocks inserted so far.
+    ids: HashSet<String>,
     /// Screen as last sent to the view.
     screen: Vec<Line>,
     alt: bool,
@@ -102,6 +116,8 @@ impl Terminal {
             term: Term::new(config, &size, Listener(tx)),
             parser: Processor::new(),
             term_events: rx,
+            filter: Filter::default(),
+            ids: HashSet::new(),
             screen: Vec::new(),
             alt: false,
             app_cursor: false,
@@ -109,14 +125,20 @@ impl Terminal {
     }
 
     pub fn advance(&mut self, bytes: &[u8]) -> Update {
-        self.parser.advance(&mut self.term, bytes);
-        self.update()
+        let mut events = Vec::new();
+        for piece in self.filter.feed(bytes) {
+            match piece {
+                Piece::Bytes(bytes) => self.parser.advance(&mut self.term, &bytes),
+                Piece::Block(block) => self.insert(block, &mut events),
+            }
+        }
+        self.update(events)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Update {
         self.term
             .resize(TermSize::new(cols.max(1) as usize, rows.max(1) as usize));
-        self.update()
+        self.update(Vec::new())
     }
 
     /// Encodes pasted text, honoring bracketed paste mode.
@@ -137,8 +159,53 @@ impl Terminal {
             .collect()
     }
 
-    fn update(&mut self) -> Update {
-        let mut update = Update::default();
+    /// Inserts a block at the cursor: everything above it moves to the
+    /// scrollback, the block follows, and the cursor starts the next line.
+    fn insert(&mut self, block: Block, events: &mut Vec<Event>) {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        let replace = block
+            .id
+            .as_ref()
+            .is_some_and(|id| !self.ids.insert(id.clone()));
+        let block = match block.render() {
+            Ok(block) => block,
+            Err(e) => return eprintln!("rt: invalid rich block: {e}"),
+        };
+        if !replace {
+            if self.term.grid().cursor.point.column.0 > 0 {
+                self.parser.advance(&mut self.term, b"\r\n");
+            }
+            let y = self.term.grid().cursor.point.line.0;
+            if y > 0 {
+                let scroll = format!("\x1b[{y}S\x1b[H");
+                self.parser.advance(&mut self.term, scroll.as_bytes());
+            }
+            self.drain_history(events);
+        }
+        events.push(Event::Block { block, replace });
+    }
+
+    /// Emits the lines that scrolled out of the main screen.
+    ///
+    /// The alternate grid has no history, so this only ever drains the main
+    /// screen; lines pushed while the alternate screen is active show up on
+    /// exit, which is still the right place in the flow.
+    fn drain_history(&mut self, events: &mut Vec<Event>) {
+        let grid = self.term.grid();
+        for i in (1..=grid.history_size() as i32).rev() {
+            let line = render(&grid[GridLine(-i)], None);
+            events.push(Event::ScrollOut { line });
+        }
+        self.term.grid_mut().clear_history();
+    }
+
+    fn update(&mut self, events: Vec<Event>) -> Update {
+        let mut update = Update {
+            events,
+            reply: String::new(),
+        };
         for event in self.term_events.try_iter() {
             if let TermEvent::PtyWrite(text) = event {
                 update.reply.push_str(&text);
@@ -158,15 +225,7 @@ impl Terminal {
             update.events.push(Event::Mode { app_cursor });
         }
 
-        // The alternate grid has no history, so this only ever drains the main
-        // screen; lines pushed while the alternate screen is active show up on
-        // exit, which is still the right place in the flow.
-        let grid = self.term.grid();
-        for i in (1..=grid.history_size() as i32).rev() {
-            let line = render(&grid[GridLine(-i)], None);
-            update.events.push(Event::ScrollOut { line });
-        }
-        self.term.grid_mut().clear_history();
+        self.drain_history(&mut update.events);
 
         let grid = self.term.grid();
         let cursor = mode
@@ -367,6 +426,43 @@ mod tests {
         };
         assert!(line.wrap);
         assert_eq!(line.text(), "abcd");
+    }
+
+    fn kinds(events: &[Event]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::ScrollOut { line } => Some(line.text()),
+                Event::Block { replace, .. } => Some(format!("block {replace}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn block_lands_after_output_above_cursor() {
+        let mut term = Terminal::new(10, 4);
+        // "PGI+" is base64 for "<b>".
+        let update = term.advance(b"one\r\ntwo\x1b]7117;html;PGI+\x07$ ");
+        assert_eq!(kinds(&update.events), ["one", "two", "block false"]);
+        assert_eq!(term.text(), "$\n\n\n\n");
+    }
+
+    #[test]
+    fn block_with_known_id_is_replaced_in_place() {
+        let mut term = Terminal::new(10, 4);
+        term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
+        let update = term.advance(b"x\x1b]7117;html;id=p;PGI+\x07");
+        assert_eq!(kinds(&update.events), ["block true"]);
+        assert_eq!(term.text(), "x\n\n\n\n");
+    }
+
+    #[test]
+    fn blocks_are_ignored_on_alt_screen() {
+        let mut term = Terminal::new(10, 2);
+        let update = term.advance(b"\x1b[?1049h\x1b]7117;html;PGI+\x07x");
+        assert_eq!(kinds(&update.events), Vec::<String>::new());
+        assert_eq!(term.text(), "x\n\n");
     }
 
     #[test]
