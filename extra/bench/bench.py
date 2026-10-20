@@ -67,7 +67,9 @@ def inner(ctl):
         for line in fifo:
             cmd, *args = line.split()
             size = os.get_terminal_size()
-            if cmd == "size":
+            if cmd == "black":
+                paint(BLACK)
+            elif cmd == "size":
                 (ctl / "size").write_text(json.dumps([size.columns, size.lines]))
             elif cmd == "cat":
                 t0 = time.time_ns()
