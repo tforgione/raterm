@@ -2,7 +2,7 @@
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
   "title": {
     "text": "Cost of a full scrollback",
-    "subtitle": "median output latency (ms) and memory (PSS, MiB), log scales"
+    "subtitle": "median output latency (ms) and memory (PSS, MiB) with a full scrollback; lines on a log scale"
   },
   "data": {
     "url": "scrollback.csv",
