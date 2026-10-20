@@ -609,7 +609,14 @@ fn color(color: Color) -> Option<String> {
 }
 
 fn hex(r: u8, g: u8, b: u8) -> String {
-    format!("#{r:02x}{g:02x}{b:02x}")
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(7);
+    s.push('#');
+    for v in [r, g, b] {
+        s.push(DIGITS[(v >> 4) as usize] as char);
+        s.push(DIGITS[(v & 15) as usize] as char);
+    }
+    s
 }
 
 #[cfg(test)]
