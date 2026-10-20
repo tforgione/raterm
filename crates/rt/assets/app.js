@@ -16,9 +16,22 @@ document.body.classList.add(`cursor-${config.cursor.style}`);
 if (config.cursor.blink) {
   setInterval(() => document.body.classList.toggle("blink-off"), 530);
 }
-window.addEventListener("blur", () => document.body.classList.add("unfocused"));
+window.addEventListener("blur", () => {
+  document.body.classList.add("unfocused");
+  // A click in a rich block focuses its frame, which would swallow the keys
+  // (no listener runs there, see richBlock): take the focus back. The text
+  // selected in the block stays selected, for copy.
+  setTimeout(() => {
+    if (document.activeElement instanceof HTMLIFrameElement) {
+      selectedFrame = document.activeElement;
+      input.focus({ preventScroll: true });
+    }
+  });
+});
 window.addEventListener("focus", () => document.body.classList.remove("unfocused"));
 
+// Last rich block clicked, whose selection copy falls back to.
+let selectedFrame = null;
 let zoom = 0;
 
 function setZoom(level) {
@@ -107,7 +120,8 @@ function richBlock(ev) {
     return div;
   }
   // No allow-scripts: the content can never run JavaScript. allow-same-origin
-  // only lets this page measure the content and catch link clicks.
+  // only lets this page measure the content and read its selection. WebKit
+  // runs no listener at all on such a document, even one added from here.
   const frame = document.createElement("iframe");
   frame.sandbox = "allow-same-origin";
   frame.style.maxHeight = maxHeight;
@@ -122,16 +136,6 @@ function richBlock(ev) {
     new ResizeObserver(fit).observe(doc.body);
     fit();
     if (ev.kind === "html") div.dataset.text = doc.body.innerText;
-    // A click in the block focuses its document: keys must still reach the
-    // terminal (onKeydown then gives the focus back to it).
-    doc.addEventListener("keydown", onKeydown);
-    doc.addEventListener("click", (e) => {
-      const link = e.target.closest?.("a[href]");
-      if (link) {
-        e.preventDefault();
-        send({ type: "open_url", url: link.href });
-      }
-    });
   });
   div.append(frame);
   return div;
@@ -333,10 +337,12 @@ function runAction(binding) {
     return true;
   }
   switch (binding) {
-    case "copy":
-      // The selection may be inside a rich block that has the focus.
-      (document.activeElement.contentDocument ?? document).execCommand("copy");
+    case "copy": {
+      const frame = selectedFrame?.isConnected && selectedFrame.contentDocument;
+      const inFrame = window.getSelection().isCollapsed && frame && !frame.getSelection().isCollapsed;
+      (inFrame ? frame : document).execCommand("copy");
       break;
+    }
     case "paste":
       input.focus();
       document.execCommand("paste");
