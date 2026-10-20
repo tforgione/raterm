@@ -1,5 +1,6 @@
 use std::io::Read;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 
 use crate::config::Config;
 use crate::pty::{Error, Pty};
@@ -67,11 +68,30 @@ impl Session {
     }
 
     /// Reads the pty until the shell exits.
+    ///
+    /// The pty hands out a flood 4 KiB at a time; reading on a thread of its
+    /// own lets this one take all that is pending, up to `BATCH` bytes, so
+    /// that the screen is rendered and sent once per batch, not per read.
     pub fn pump(&self, mut reader: Box<dyn Read + Send>, mut emit: impl FnMut(Vec<Event>)) {
-        let mut buf = vec![0; 64 * 1024];
-        while let Ok(n @ 1..) = reader.read(&mut buf) {
+        const READ: usize = 16 * 1024;
+        const BATCH: usize = 64 * 1024;
+        let (tx, rx) = mpsc::sync_channel(BATCH / READ);
+        thread::spawn(move || {
+            let mut buf = vec![0; READ];
+            while let Ok(n @ 1..) = reader.read(&mut buf) {
+                if tx.send(buf[..n].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        while let Ok(mut batch) = rx.recv() {
+            while batch.len() + READ <= BATCH
+                && let Ok(more) = rx.try_recv()
+            {
+                batch.extend(more);
+            }
             let mut term = self.term.lock().unwrap();
-            let update = term.advance(&buf[..n]);
+            let update = term.advance(&batch);
             self.dispatch(update, &mut emit);
         }
     }
