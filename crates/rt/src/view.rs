@@ -1,9 +1,10 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::io::Read;
 use std::thread;
 
-use rt::pty::{Error, Pty, decode_utf8};
+use rt::pty::Error;
+use rt::session::Session;
+use rt::term::Event as TermEvent;
 use serde::Deserialize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -13,7 +14,8 @@ use wry::http::{Response, header::CONTENT_TYPE};
 use wry::{PageLoadEvent, WebViewBuilder, WebViewBuilderExtUnix};
 
 enum UserEvent {
-    Output(String),
+    /// A JSON array of terminal events.
+    Events(String),
     Exit,
 }
 
@@ -21,33 +23,42 @@ enum UserEvent {
 #[serde(tag = "type", rename_all = "snake_case")]
 enum Message {
     Input { data: String },
+    Paste { data: String },
+    Resize { cols: u16, rows: u16 },
 }
 
 pub fn run(shell: &str) -> Result<(), Error> {
-    let (pty, reader) = Pty::spawn(shell, 80, 24)?;
-    let pty = RefCell::new(pty);
+    let (session, reader) = Session::spawn(shell, 80, 24)?;
     let reader = RefCell::new(Some(reader));
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new().with_title("rt").build(&event_loop)?;
 
+    let pump_session = session.clone();
+    let pump_proxy = proxy.clone();
     let webview = WebViewBuilder::new()
         .with_custom_protocol("rt".into(), |_, req| serve(req.uri().path()))
         .with_url("rt://app/")
+        .with_clipboard(true)
         // Output read before the page is ready would be lost, so the pty is
         // only drained once the page has loaded; the kernel buffers until then.
         .with_on_page_load_handler(move |event, _| {
             if let PageLoadEvent::Finished = event
                 && let Some(reader) = reader.borrow_mut().take()
             {
-                let proxy = proxy.clone();
-                thread::spawn(move || pump(reader, proxy));
+                let (session, proxy) = (pump_session.clone(), pump_proxy.clone());
+                thread::spawn(move || {
+                    session.pump(reader, |events| send(&proxy, &events));
+                    let _ = proxy.send_event(UserEvent::Exit);
+                });
             }
         })
         .with_ipc_handler(move |req| match serde_json::from_str(req.body()) {
-            Ok(Message::Input { data }) => {
-                let _ = pty.borrow_mut().write(data.as_bytes());
+            Ok(Message::Input { data }) => session.input(data.as_bytes()),
+            Ok(Message::Paste { data }) => session.paste(&data),
+            Ok(Message::Resize { cols, rows }) => {
+                session.resize(cols, rows, |events| send(&proxy, &events))
             }
             Err(e) => eprintln!("rt: bad ipc message: {e}"),
         })
@@ -56,9 +67,8 @@ pub fn run(shell: &str) -> Result<(), Error> {
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(UserEvent::Output(data)) => {
-                let event = serde_json::json!({ "type": "raw", "data": data });
-                let _ = webview.evaluate_script(&format!("rt.event({event})"));
+            Event::UserEvent(UserEvent::Events(json)) => {
+                let _ = webview.evaluate_script(&format!("rt.events({json})"));
             }
             Event::UserEvent(UserEvent::Exit)
             | Event::WindowEvent {
@@ -70,17 +80,9 @@ pub fn run(shell: &str) -> Result<(), Error> {
     })
 }
 
-fn pump(mut reader: Box<dyn Read + Send>, proxy: EventLoopProxy<UserEvent>) {
-    let mut buf = [0; 64 * 1024];
-    let mut pending = Vec::new();
-    while let Ok(n @ 1..) = reader.read(&mut buf) {
-        pending.extend_from_slice(&buf[..n]);
-        let text = decode_utf8(&mut pending);
-        if !text.is_empty() && proxy.send_event(UserEvent::Output(text)).is_err() {
-            return;
-        }
-    }
-    let _ = proxy.send_event(UserEvent::Exit);
+fn send(proxy: &EventLoopProxy<UserEvent>, events: &[TermEvent]) {
+    let json = serde_json::to_string(events).expect("events serialize");
+    let _ = proxy.send_event(UserEvent::Events(json));
 }
 
 fn serve(path: &str) -> Response<Cow<'static, [u8]>> {

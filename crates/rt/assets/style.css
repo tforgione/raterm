@@ -1,18 +1,86 @@
 :root {
   --fg: #d8dee9;
   --bg: #1e1e24;
+  --cursor: #d8dee9;
+  --selection: #44475a;
+  --c0: #2e3440;
+  --c1: #e06c75;
+  --c2: #98c379;
+  --c3: #e5c07b;
+  --c4: #61afef;
+  --c5: #c678dd;
+  --c6: #56b6c2;
+  --c7: #d8dee9;
+  --c8: #5c6370;
+  --c9: #f08088;
+  --c10: #b5e890;
+  --c11: #f5d58e;
+  --c12: #82c4ff;
+  --c13: #da9cf0;
+  --c14: #7fd4de;
+  --c15: #ffffff;
 }
 
-body {
+html, body {
   margin: 0;
-  padding: 4px;
+  height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--fg);
+  font-family: monospace;
+  font-size: 14px;
 }
 
-#out {
-  margin: 0;
-  font-family: monospace;
+::selection {
+  background: var(--selection);
+}
+
+#flow, #alt {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 2px 4px;
+}
+
+#flow {
+  overflow-y: auto;
+}
+
+#alt {
+  overflow: hidden;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+.line {
+  line-height: 1.25;
+  min-height: 1.25em;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+#screen .line, #alt .line {
+  white-space: pre;
+  overflow: hidden;
+}
+
+.b { font-weight: bold; }
+.i { font-style: italic; }
+.u { text-decoration: underline; }
+.s { text-decoration: line-through; }
+.u.s { text-decoration: underline line-through; }
+.d { opacity: 0.6; }
+.h { visibility: hidden; }
+
+#input {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  resize: none;
 }
