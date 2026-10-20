@@ -1,6 +1,6 @@
 :root {
   --fg: #d8dee9;
-  --bg: #1e1e24;
+  --bg: #151618;
   --cursor: #d8dee9;
   /* Selected text is shown inverted, as in most terminals. */
   --selection: var(--fg);
