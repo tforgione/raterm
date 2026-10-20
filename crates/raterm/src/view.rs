@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use raterm::config::{self, Config};
@@ -7,7 +8,7 @@ use raterm::history;
 use raterm::media;
 use raterm::pty::Error;
 use raterm::session::Session;
-use raterm::term::Event as TermEvent;
+use raterm::term::{self, Event as TermEvent};
 use serde::Deserialize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -18,8 +19,8 @@ use wry::http::header::CONTENT_TYPE;
 use wry::{PageLoadEvent, WebViewBuilder, WebViewBuilderExtUnix};
 
 enum UserEvent {
-    /// A JSON array of terminal events.
-    Events(String),
+    /// Terminal events wait in the outbox.
+    Events,
     Title(String),
     Exit,
 }
@@ -80,15 +81,19 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     );
 
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
-    let proxy = event_loop.create_proxy();
+    let outbox = Outbox {
+        events: Arc::default(),
+        proxy: event_loop.create_proxy(),
+    };
     let window = WindowBuilder::new()
         .with_title(&title)
         .with_decorations(config.window.decorations)
         .build(&event_loop)?;
 
     let pump_session = session.clone();
-    let pump_proxy = proxy.clone();
-    let title_proxy = proxy.clone();
+    let pump_outbox = outbox.clone();
+    let title_proxy = outbox.proxy.clone();
+    let pending = outbox.events.clone();
     let webview = WebViewBuilder::new()
         .with_custom_protocol("raterm".into(), move |_, req| {
             serve(req.uri().path(), &config_js, &csp)
@@ -105,10 +110,10 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             if let PageLoadEvent::Finished = event
                 && let Some(reader) = reader.borrow_mut().take()
             {
-                let (session, proxy) = (pump_session.clone(), pump_proxy.clone());
+                let (session, outbox) = (pump_session.clone(), pump_outbox.clone());
                 thread::spawn(move || {
-                    session.pump(reader, |events| send(&proxy, &events));
-                    let _ = proxy.send_event(UserEvent::Exit);
+                    session.pump(reader, |events| outbox.send(events));
+                    let _ = outbox.proxy.send_event(UserEvent::Exit);
                 });
             }
         })
@@ -116,7 +121,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             Ok(Message::Input { data }) => session.input(data.as_bytes()),
             Ok(Message::Paste { data }) => session.paste(&data),
             Ok(Message::Resize { cols, rows }) => {
-                session.resize(cols, rows, |events| send(&proxy, &events))
+                session.resize(cols, rows, |events| outbox.send(events))
             }
             Ok(Message::OpenUrl { url }) => open_url(&url),
             Ok(Message::PastePrimary) => {
@@ -129,7 +134,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             }
             Ok(Message::NewWindow) => new_window(session.cwd()),
             Ok(Message::Entries { from, count }) => {
-                session.query(|term| term.entries(from, count), |e| send(&proxy, &e))
+                session.query(|term| term.entries(from, count), |e| outbox.send(e))
             }
             Ok(Message::Search {
                 query,
@@ -138,7 +143,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 backwards,
             }) => session.query(
                 |term| term.search(&query, entry.map(|n| (n, at)), backwards),
-                |e| send(&proxy, &e),
+                |e| outbox.send(e),
             ),
             Err(e) => eprintln!("raterm: bad ipc message: {e}"),
         })
@@ -147,7 +152,9 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(UserEvent::Events(json)) => {
+            Event::UserEvent(UserEvent::Events) => {
+                let events = std::mem::take(&mut *pending.lock().unwrap());
+                let json = serde_json::to_string(&events).expect("events serialize");
                 let _ = webview.evaluate_script(&format!("raterm.events({json})"));
             }
             Event::UserEvent(UserEvent::Title(set)) => {
@@ -163,9 +170,26 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     })
 }
 
-fn send(proxy: &EventLoopProxy<UserEvent>, events: &[TermEvent]) {
-    let json = serde_json::to_string(events).expect("events serialize");
-    let _ = proxy.send_event(UserEvent::Events(json));
+/// Events on their way to the page. While it is busy (a flood), those of
+/// several batches pile up here and go in one call, without the entries that
+/// the page would drop: evaluating the JSON of every line that scrolled out
+/// took longer than everything else the page does.
+#[derive(Clone)]
+struct Outbox {
+    events: Arc<Mutex<Vec<TermEvent>>>,
+    proxy: EventLoopProxy<UserEvent>,
+}
+
+impl Outbox {
+    fn send(&self, events: Vec<TermEvent>) {
+        let mut pending = self.events.lock().unwrap();
+        let wake = pending.is_empty();
+        pending.extend(events);
+        term::trim(&mut pending);
+        if wake {
+            let _ = self.proxy.send_event(UserEvent::Events);
+        }
+    }
 }
 
 /// Only the app and its rich blocks (about:srcdoc) load in the webview. Any

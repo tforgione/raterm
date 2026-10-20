@@ -394,12 +394,7 @@ impl Terminal {
         }
 
         self.drain_history(&mut update.events);
-        // The page would drop the entries before the last `WINDOW` before
-        // showing them.
-        let shown = self.history.next().saturating_sub(WINDOW as u64);
-        update
-            .events
-            .retain(|e| !matches!(e, Event::ScrollOut { entry, .. } if *entry < shown));
+        trim(&mut update.events);
 
         let grid = self.term.grid();
         let cursor = mode
@@ -533,6 +528,24 @@ impl Terminal {
             link: None,
         }
     }
+}
+
+/// Leaves out the entries that `events` add to the scrollback before the last
+/// `WINDOW` of them: the page would drop them before showing them.
+pub fn trim(events: &mut Vec<Event>) {
+    let added = |e: &Event| match *e {
+        Event::ScrollOut { entry, .. }
+        | Event::Block {
+            entry,
+            replace: false,
+            ..
+        } => Some(entry),
+        _ => None,
+    };
+    let Some(newest) = events.iter().filter_map(added).max() else {
+        return;
+    };
+    events.retain(|e| added(e).is_none_or(|entry| entry + WINDOW as u64 > newest));
 }
 
 /// Cell ranges of the http(s) URLs written in a line.
@@ -848,6 +861,17 @@ mod tests {
         assert_eq!(sent.len(), WINDOW);
         assert_eq!(sent[0], 10);
         assert_eq!(term.history.next(), (WINDOW + 10) as u64);
+    }
+
+    #[test]
+    fn batches_put_together_keep_the_last_window() {
+        let mut term = Terminal::new(10, 1);
+        let mut events = term.advance(b"a\r\n").events;
+        events.extend(term.advance("x\r\n".repeat(WINDOW).as_bytes()).events);
+        trim(&mut events);
+        assert_eq!(scrolled(&events).len(), WINDOW);
+        assert!(scrolled(&events).iter().all(|text| text == "x"));
+        assert!(events.iter().any(|e| matches!(e, Event::History { .. })));
     }
 
     #[test]
