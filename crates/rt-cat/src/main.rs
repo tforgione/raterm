@@ -1,4 +1,137 @@
-fn main() {
-    eprintln!("rt-cat: not implemented yet (milestone M2)");
-    std::process::exit(1);
+//! Shows a file as a rich block in rt, or as plain text anywhere else.
+
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD;
+use clap::{ArgGroup, Parser};
+
+/// Must match rt's limit, which drops larger blocks.
+const MAX_PAYLOAD: usize = 8 << 20;
+
+#[derive(Parser)]
+#[command(about = "Show a file as a rich block in the rt terminal")]
+#[command(group(ArgGroup::new("kind").args(["md", "html", "svg", "img"])))]
+struct Args {
+    /// File to show, or `-` for stdin.
+    file: PathBuf,
+    /// Treat the input as Markdown.
+    #[arg(long)]
+    md: bool,
+    /// Treat the input as HTML.
+    #[arg(long)]
+    html: bool,
+    /// Treat the input as SVG.
+    #[arg(long)]
+    svg: bool,
+    /// Treat the input as an image (png, jpg, gif or webp).
+    #[arg(long)]
+    img: bool,
+    /// Maximum width, in columns.
+    #[arg(long, value_name = "N")]
+    width: Option<u16>,
+    /// Maximum height, in lines.
+    #[arg(long, value_name = "N")]
+    height: Option<u16>,
+    /// Replace the previous block with the same id.
+    #[arg(long, value_name = "NAME")]
+    id: Option<String>,
+    /// Emit the block even when not running in rt.
+    #[arg(long)]
+    force: bool,
+}
+
+fn main() -> ExitCode {
+    match run(Args::parse()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("rt-cat: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run(args: Args) -> Result<(), String> {
+    if let Some(id) = &args.id
+        && id.chars().any(|c| c == ';' || c.is_control())
+    {
+        return Err("the id cannot contain ';' or control characters".into());
+    }
+    let stdin = args.file == Path::new("-");
+    let data = if stdin {
+        let mut data = Vec::new();
+        io::stdin().read_to_end(&mut data).map(|_| data)
+    } else {
+        std::fs::read(&args.file)
+    }
+    .map_err(|e| format!("{}: {e}", args.file.display()))?;
+
+    let kind = if args.md {
+        "md"
+    } else if args.html {
+        "html"
+    } else if args.svg {
+        "svg"
+    } else if args.img {
+        "img"
+    } else {
+        let ext = args.file.extension().and_then(|e| e.to_str());
+        match ext.map(str::to_ascii_lowercase).as_deref() {
+            Some("md" | "markdown") => "md",
+            Some("html" | "htm") => "html",
+            Some("svg") => "svg",
+            Some("png" | "jpg" | "jpeg" | "gif" | "webp") => "img",
+            _ => return Err("cannot guess the kind, use --md, --html, --svg or --img".into()),
+        }
+    };
+    let mime = if kind == "img" {
+        Some(sniff(&data).ok_or("unsupported image format")?)
+    } else {
+        None
+    };
+
+    let mut out = io::stdout().lock();
+    let in_rt = std::env::var_os("RT_TERM").is_some();
+    let written = if in_rt || args.force {
+        let payload = STANDARD.encode(&data);
+        if payload.len() > MAX_PAYLOAD {
+            return Err(format!(
+                "too large: {} bytes encoded, max {MAX_PAYLOAD}",
+                payload.len()
+            ));
+        }
+        let mut params = String::new();
+        let mut param = |key: &str, value: Option<String>| {
+            if let Some(value) = value {
+                params += &format!(";{key}={value}");
+            }
+        };
+        param("mime", mime.map(String::from));
+        param("w", args.width.map(|w| w.to_string()));
+        param("h", args.height.map(|h| h.to_string()));
+        param("id", args.id);
+        write!(out, "\x1b]7117;{kind}{params};{payload}\x07")
+    } else if kind == "md" || kind == "html" {
+        out.write_all(&data)
+    } else {
+        writeln!(out, "{}", args.file.display())
+    };
+    written.and_then(|_| out.flush()).map_err(|e| e.to_string())
+}
+
+/// Image MIME type from the file's magic bytes.
+fn sniff(data: &[u8]) -> Option<&'static str> {
+    if data.starts_with(b"\x89PNG") {
+        Some("image/png")
+    } else if data.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if data.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
