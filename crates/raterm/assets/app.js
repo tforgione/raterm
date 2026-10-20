@@ -68,9 +68,34 @@ window.raterm = {
 };
 
 function flush() {
-  for (const ev of queue) apply(ev);
+  for (const ev of coalesce(queue)) apply(ev);
   queue = [];
   follow();
+}
+
+/// Merges the screen updates of a batch, as only the last state of each row
+/// gets painted: a program redrawing fast sends many per frame. A switch of
+/// screen ends a merge, as the rows that follow belong to the other grid.
+function coalesce(events) {
+  const out = [];
+  let merged = null;
+  for (const ev of events) {
+    if (ev.type !== "lines") {
+      if (ev.type === "alt") merged = null;
+      out.push(ev);
+      continue;
+    }
+    if (!merged) {
+      merged = { type: "lines", rows: new Map() };
+      out.push(merged);
+    }
+    merged.height = ev.height;
+    // Rows cut by a smaller screen are resent by the core if it grows back.
+    for (const y of merged.rows.keys()) if (y >= ev.height) merged.rows.delete(y);
+    for (const row of ev.rows) merged.rows.set(row.y, row);
+  }
+  for (const ev of out) if (ev.rows instanceof Map) ev.rows = [...ev.rows.values()];
+  return out;
 }
 
 function apply(ev) {
