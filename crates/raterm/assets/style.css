@@ -5,6 +5,8 @@
   /* Selected text is shown inverted, as in most terminals. */
   --selection: var(--fg);
   --selection-text: var(--bg);
+  /* Inline code in Markdown and HTML blocks. */
+  --inline-code: #e8857f;
   --c0: #2e3440;
   --c1: #e06c75;
   --c2: #98c379;

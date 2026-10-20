@@ -174,7 +174,7 @@ function richBlock(ev) {
 /// Stylesheet of rich blocks, using the terminal's current colors.
 function richStyle() {
   const root = getComputedStyle(document.documentElement);
-  const vars = ["--fg", "--bg", "--selection", "--selection-text", "--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c8"]
+  const vars = ["--fg", "--bg", "--selection", "--selection-text", "--inline-code", "--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c8"]
     .map((name) => `${name}: ${root.getPropertyValue(name)};`)
     .join(" ");
   const columns = config.markdown.max_width;
@@ -188,6 +188,13 @@ function richStyle() {
     body { font: ${text}; padding: 4px 0; overflow-x: auto; }
     a { color: var(--c4); }
     pre, code { font-family: ${fontFamily(config.font.family, "monospace")}; font-size: 0.9em; }
+    :not(pre) > code {
+      color: var(--inline-code);
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 4px;
+      padding: 0.1em 0.35em;
+    }
     pre { padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }
     /* Syntax highlighting: classes are TextMate scopes, colored with the
        terminal palette so that user.css themes them too. */
