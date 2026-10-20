@@ -10,6 +10,7 @@ capture takes one compositor frame, so every time is precise to one frame.
     BENCH_MIB=4 bench.py run [--only startup,latency,throughput] [--runs N] [--out DIR]
     bench.py report DIR     # writes DIR/*.csv and prints Markdown tables
     charts/build.sh DIR OUT # both, plus the charts in OUT
+    page.py DIR OUT.md      # the Performance page of the wiki
 
 Never kills anything but the windows it opened, found by their unique title.
 """
