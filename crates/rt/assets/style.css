@@ -60,8 +60,10 @@ html, body {
 }
 
 .line {
-  line-height: 1.25;
-  min-height: 1.25em;
+  /* The font's own line height, without extra spacing: box drawing and
+     block characters are designed to touch the lines above and below. */
+  line-height: normal;
+  min-height: 1lh;
   white-space: pre-wrap;
   word-break: break-all;
 }

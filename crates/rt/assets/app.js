@@ -109,7 +109,7 @@ function richBlock(ev) {
   if (ev.id) div.dataset.id = ev.id;
   if (ev.text) div.dataset.text = ev.text;
   if (ev.w) div.style.maxWidth = `${ev.w}ch`;
-  const maxHeight = ev.h ? `${ev.h * 1.25}em` : "";
+  const maxHeight = ev.h ? `${ev.h}lh` : "";
   if (ev.kind === "img" || ev.kind === "svg") {
     // An SVG loaded as an image never runs scripts nor fetches resources.
     const img = document.createElement("img");
