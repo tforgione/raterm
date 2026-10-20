@@ -61,7 +61,8 @@ Sémantique :
 - Le bloc est inséré à la position du curseur, comme une ligne de hauteur variable. Le curseur passe à la ligne suivante après le bloc.
 - En écran alternatif, les blocs sont ignorés (pas de rendu riche dans vim).
 - Un bloc avec `id` remplace le bloc précédent de même `id` s'il existe, sinon il est inséré normalement. Permet les barres de progression et les tableaux qui se remplissent.
-- Les blocs `img` et `svg` sont limités en hauteur par `[images] max_height` (en lignes) dans la config, en plus de leur clé `h`. Un clic sur l'un d'eux l'affiche en plein écran sur fond sombre ; Échap, la croix en haut à droite ou un clic n'importe où ramènent au terminal.
+- Le texte des blocs `md` (paragraphes, titres, listes, code) tient dans une colonne centrée de `[markdown] max_width` colonnes (100 par défaut, 0 pour toute la largeur) ; les tableaux gardent toute la largeur du terminal.
+- Les blocs `img`, `svg` et `video` sont limités en hauteur par `[images] max_height` (en lignes) dans la config, en plus de leur clé `h`. Un clic sur l'un d'eux l'affiche en plein écran sur fond sombre ; Échap, la croix en haut à droite ou un clic n'importe où ramènent au terminal.
 - Le bloc fait partie du scrollback : il est sélectionnable, copiable (comme texte brut pour `md`, comme image pour `img`/`svg`) et conservé dans l'export de session.
 
 Sécurité : le HTML n'est pas exécuté dans la page du terminal elle-même. Chaque bloc `html`/`md`/`svg` est rendu dans un `<iframe sandbox>` sans `allow-scripts`, avec `srcdoc` et une feuille de style injectée, redimensionné à la hauteur de son contenu via `ResizeObserver` dans la page parente. Un programme qui écrit dans le terminal ne doit jamais pouvoir exécuter du JavaScript dans le processus `raterm`. Les `<a href>` sont ouverts via `xdg-open` par le cœur Rust, jamais dans la webview.
