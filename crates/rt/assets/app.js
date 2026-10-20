@@ -479,10 +479,8 @@ function closeViewer() {
   input.focus({ preventScroll: true });
 }
 
-// Closes on the cross or anywhere around the image, not on the image itself.
-viewer.addEventListener("click", (e) => {
-  if (e.target.tagName !== "IMG") closeViewer();
-});
+// Any click closes it: on the cross, the image or around it.
+viewer.addEventListener("click", closeViewer);
 
 function onKeydown(e) {
   if (e.isComposing) return;
