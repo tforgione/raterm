@@ -197,6 +197,7 @@ impl Block {
                 let source = String::from_utf8_lossy(&self.data).into_owned();
                 let mut options = comrak::Options::default();
                 options.extension.table = true;
+                options.extension.autolink = true;
                 // Raw HTML is fine: the result is sandboxed exactly like `html`.
                 options.render.r#unsafe = true;
                 (comrak::markdown_to_html(&source, &options), Some(source))
@@ -316,6 +317,15 @@ mod tests {
         let rendered = b.render().unwrap();
         assert!(rendered.content.contains("<table>"));
         assert_eq!(rendered.text.as_deref(), Some("|a|b|\n|-|-|\n|1|2|\n"));
+    }
+
+    #[test]
+    fn bare_urls_become_links() {
+        let Piece::Block(b) = block(Kind::Md, b"see https://example.com\n") else {
+            unreachable!()
+        };
+        let html = b.render().unwrap().content;
+        assert!(html.contains(r#"<a href="https://example.com">"#), "{html}");
     }
 
     #[test]

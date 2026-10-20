@@ -64,6 +64,7 @@ pub fn run(config: Config) -> Result<(), Error> {
         })
         .with_url("rt://app/")
         .with_clipboard(true)
+        .with_navigation_handler(|url| navigate(&url))
         .with_document_title_changed_handler(move |title| {
             let _ = title_proxy.send_event(UserEvent::Title(title));
         })
@@ -122,7 +123,19 @@ fn send(proxy: &EventLoopProxy<UserEvent>, events: &[TermEvent]) {
     let _ = proxy.send_event(UserEvent::Events(json));
 }
 
-/// Opens a link from a rich block in the desktop's handler, never in the webview.
+/// Only the app and its rich blocks (about:srcdoc) load in the webview. Any
+/// other navigation is a link clicked in a block: no listener can catch the
+/// click there (the block runs no script), so it is caught here instead.
+/// Blocks cannot navigate on their own: the sandbox blocks <meta refresh>.
+fn navigate(url: &str) -> bool {
+    if url.starts_with("rt://app/") || url.starts_with("about:") {
+        return true;
+    }
+    open_url(url);
+    false
+}
+
+/// Opens a link in the desktop's handler, never in the webview.
 fn open_url(url: &str) {
     // Other schemes (file:, custom app handlers) would let terminal output
     // launch arbitrary local handlers on a click.
@@ -179,7 +192,8 @@ fn serve(path: &str, config_js: &str) -> Response<Cow<'static, [u8]>> {
         // data: images, but never load anything from the network.
         .header(
             "Content-Security-Policy",
-            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; \
+             frame-src 'self' http: https: mailto:",
         )
         .body(body)
         .unwrap()
