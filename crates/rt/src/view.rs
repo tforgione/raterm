@@ -25,6 +25,7 @@ enum Message {
     Input { data: String },
     Paste { data: String },
     Resize { cols: u16, rows: u16 },
+    OpenUrl { url: String },
 }
 
 pub fn run(shell: &str) -> Result<(), Error> {
@@ -60,6 +61,7 @@ pub fn run(shell: &str) -> Result<(), Error> {
             Ok(Message::Resize { cols, rows }) => {
                 session.resize(cols, rows, |events| send(&proxy, &events))
             }
+            Ok(Message::OpenUrl { url }) => open_url(&url),
             Err(e) => eprintln!("rt: bad ipc message: {e}"),
         })
         .build_gtk(window.default_vbox().ok_or("no GTK container")?)?;
@@ -85,6 +87,22 @@ fn send(proxy: &EventLoopProxy<UserEvent>, events: &[TermEvent]) {
     let _ = proxy.send_event(UserEvent::Events(json));
 }
 
+/// Opens a link from a rich block in the desktop's handler, never in the webview.
+fn open_url(url: &str) {
+    // Other schemes (file:, custom app handlers) would let terminal output
+    // launch arbitrary local handlers on a click.
+    if !["http://", "https://", "mailto:"]
+        .iter()
+        .any(|s| url.starts_with(s))
+    {
+        return eprintln!("rt: refusing to open {url:?}");
+    }
+    match std::process::Command::new("xdg-open").arg(url).spawn() {
+        Ok(mut child) => drop(thread::spawn(move || child.wait())),
+        Err(e) => eprintln!("rt: xdg-open failed: {e}"),
+    }
+}
+
 fn serve(path: &str) -> Response<Cow<'static, [u8]>> {
     let (body, mime) = match path {
         "/" | "/index.html" => (include_str!("../assets/index.html"), "text/html"),
@@ -95,6 +113,12 @@ fn serve(path: &str) -> Response<Cow<'static, [u8]>> {
     Response::builder()
         .status(if body.is_empty() { 404 } else { 200 })
         .header(CONTENT_TYPE, mime)
+        // Rich blocks inherit this policy: they can show inline styles and
+        // data: images, but never load anything from the network.
+        .header(
+            "Content-Security-Policy",
+            "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'",
+        )
         .body(Cow::Borrowed(body.as_bytes()))
         .unwrap()
 }

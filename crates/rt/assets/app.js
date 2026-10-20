@@ -20,10 +20,9 @@ window.rt = {
 };
 
 function flush() {
-  const atBottom = flow.scrollTop + flow.clientHeight >= flow.scrollHeight - 4;
   for (const ev of queue) apply(ev);
   queue = [];
-  if (atBottom) toBottom();
+  follow();
 }
 
 function apply(ev) {
@@ -40,6 +39,7 @@ function apply(ev) {
       while (grid.children.length > ev.height) grid.lastChild.remove();
       while (grid.children.length < ev.height) grid.append(newLine());
       for (const row of ev.rows) grid.children[row.y].replaceChildren(...spans(row.runs));
+      if (!altOn) collapseTrailing(grid);
       break;
     }
     case "alt":
@@ -51,6 +51,107 @@ function apply(ev) {
     case "mode":
       appCursor = ev.app_cursor;
       break;
+    case "block": {
+      const block = richBlock(ev);
+      const old = ev.replace && flow.querySelector(`.rich[data-id="${CSS.escape(ev.id)}"]`);
+      if (old) old.replaceWith(block);
+      else flow.insertBefore(block, screen);
+      wrapped = null;
+      break;
+    }
+  }
+}
+
+// Rich blocks
+
+function richBlock(ev) {
+  const div = document.createElement("div");
+  div.className = `rich ${ev.kind}`;
+  if (ev.id) div.dataset.id = ev.id;
+  if (ev.text) div.dataset.text = ev.text;
+  if (ev.w) div.style.maxWidth = `${ev.w}ch`;
+  const maxHeight = ev.h ? `${ev.h * 1.25}em` : "";
+  if (ev.kind === "img" || ev.kind === "svg") {
+    // An SVG loaded as an image never runs scripts nor fetches resources.
+    const img = document.createElement("img");
+    img.addEventListener("load", follow);
+    img.src = ev.content;
+    img.style.maxHeight = maxHeight;
+    div.append(img);
+    return div;
+  }
+  // No allow-scripts: the content can never run JavaScript. allow-same-origin
+  // only lets this page measure the content and catch link clicks.
+  const frame = document.createElement("iframe");
+  frame.sandbox = "allow-same-origin";
+  frame.style.maxHeight = maxHeight;
+  frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8"><style>${richStyle()}</style></head><body>${ev.content}</body></html>`;
+  frame.addEventListener("load", () => {
+    const doc = frame.contentDocument;
+    const fit = () => {
+      // The body, not the document, which never gets smaller than the frame.
+      frame.style.height = `${Math.ceil(doc.body.getBoundingClientRect().height)}px`;
+      follow();
+    };
+    new ResizeObserver(fit).observe(doc.body);
+    fit();
+    if (ev.kind === "html") div.dataset.text = doc.body.innerText;
+    doc.addEventListener("click", (e) => {
+      const link = e.target.closest?.("a[href]");
+      if (link) {
+        e.preventDefault();
+        send({ type: "open_url", url: link.href });
+      }
+    });
+  });
+  div.append(frame);
+  return div;
+}
+
+/// Stylesheet of rich blocks, using the terminal's current colors.
+function richStyle() {
+  const root = getComputedStyle(document.documentElement);
+  const vars = ["--fg", "--bg", "--selection", "--c4", "--c8"]
+    .map((name) => `${name}: ${root.getPropertyValue(name)};`)
+    .join(" ");
+  return `
+    :root { ${vars} color-scheme: dark; }
+    html, body { margin: 0; color: var(--fg); background: transparent; overflow-y: hidden; }
+    body { font: 14px/1.5 sans-serif; padding: 4px 0; overflow-x: auto; }
+    a { color: var(--c4); }
+    pre, code { font-family: monospace; }
+    pre { padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }
+    table { border-collapse: collapse; margin: 8px 0; }
+    th, td { border: 1px solid var(--c8); padding: 4px 10px; text-align: left; vertical-align: top; }
+    th { background: rgba(255, 255, 255, 0.08); }
+    tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.04); }
+    img { max-width: 100%; }
+    ::selection { background: var(--selection); }
+  `;
+}
+
+// Copying a selection that spans rich blocks puts their text (the Markdown
+// source, the rendered text of HTML) in place of the empty iframes.
+document.addEventListener("copy", (e) => {
+  const selection = window.getSelection();
+  if (selection.isCollapsed || !flow.contains(selection.anchorNode)) return;
+  const fragment = selection.getRangeAt(0).cloneContents();
+  if (!fragment.querySelector(".rich[data-text]")) return;
+  const text = [...fragment.childNodes]
+    .map((node) => (node.classList?.contains("rich") ? node.dataset.text ?? "" : node.textContent))
+    .join("\n");
+  e.clipboardData.setData("text/plain", text);
+  e.preventDefault();
+});
+
+/// Hides the empty rows below the last used one, so that the output above
+/// (rich blocks in particular) stays in view right above the prompt.
+function collapseTrailing(grid) {
+  let trailing = true;
+  for (let i = grid.children.length - 1; i >= 0; i--) {
+    const row = grid.children[i];
+    trailing &&= !row.firstChild;
+    row.hidden = trailing;
   }
 }
 
@@ -69,6 +170,17 @@ function spans(runs) {
     if (run.bg) span.style.backgroundColor = run.bg;
     return span;
   });
+}
+
+// Whether the view follows new output. Only the user's scrolling changes it:
+// content growing on its own (images, iframes loading) does not fire scroll.
+let stick = true;
+flow.addEventListener("scroll", () => {
+  stick = flow.scrollTop + flow.clientHeight >= flow.scrollHeight - 4;
+});
+
+function follow() {
+  if (stick) toBottom();
 }
 
 function toBottom() {

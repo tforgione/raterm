@@ -84,3 +84,22 @@ html, body {
   padding: 0;
   resize: none;
 }
+
+.rich {
+  margin: 4px 0;
+}
+
+.rich iframe {
+  display: block;
+  width: 100%;
+  border: 0;
+}
+
+.rich img {
+  display: block;
+  max-width: 100%;
+}
+
+.rich.svg img {
+  width: 100%;
+}
