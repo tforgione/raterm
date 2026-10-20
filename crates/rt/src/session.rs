@@ -25,7 +25,6 @@ impl Session {
         let (pty, reader) = Pty::spawn(command, cols, rows)?;
         let mut term = Terminal::new(cols, rows);
         term.bold_is_bright = config.bold_is_bright;
-        term.embedded_videos = config.videos.embedded;
         let session = Session {
             pty: Mutex::new(pty),
             term: Mutex::new(term),

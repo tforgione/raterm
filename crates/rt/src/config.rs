@@ -23,7 +23,6 @@ pub struct Config {
     pub cursor: Cursor,
     pub window: Window,
     pub images: Images,
-    pub videos: Videos,
     /// Shortcuts, as `"ctrl+shift+c" = "copy"` or `"f13" = { send = "..." }`,
     /// merged over the defaults; `"none"` removes a default.
     pub keys: BTreeMap<String, Binding>,
@@ -61,17 +60,8 @@ pub struct Window {
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Images {
-    /// Maximum height of image, SVG and video blocks, in lines; unlimited if
-    /// unset.
+    /// Maximum height of image and SVG blocks, in lines; unlimited if unset.
     pub max_height: Option<u16>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct Videos {
-    /// Show videos sent whole in the stream (from stdin or over ssh), not
-    /// only local files sent by path; off as they can be heavy.
-    pub embedded: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -95,7 +85,6 @@ impl Default for Config {
             cursor: Cursor::default(),
             window: Window::default(),
             images: Images::default(),
-            videos: Videos::default(),
             keys: BTreeMap::new(),
         }
     }
