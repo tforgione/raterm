@@ -11,7 +11,20 @@ const send = (msg) => window.ipc.postMessage(JSON.stringify(msg));
 
 const config = ratermConfig;
 const root = document.documentElement;
-root.style.setProperty("--font-family", `${config.font.family}, monospace`);
+const GENERIC_FONTS = ["serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui"];
+
+/// A CSS font-family value from a configured list of names: names are quoted,
+/// as unquoted ones cannot hold words starting with a digit (Source Serif 4).
+function fontFamily(names, fallback) {
+  const quoted = names
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean)
+    .map((name) => (GENERIC_FONTS.includes(name) ? name : JSON.stringify(name)));
+  return [...quoted, fallback].join(", ");
+}
+
+root.style.setProperty("--font-family", fontFamily(config.font.family, "monospace"));
 document.body.classList.add(`cursor-${config.cursor.style}`);
 if (config.cursor.blink) {
   setInterval(() => document.body.classList.toggle("blink-off"), 530);
@@ -167,14 +180,14 @@ function richStyle() {
   const columns = config.markdown.max_width;
   // Zooming applies to blocks too (those created afterwards).
   const scale = 1.1 ** zoom;
-  const text = `${config.blocks.font_size * scale}pt/1.5 ${config.blocks.font_family}`;
+  const text = `${config.blocks.font_size * scale}pt/1.5 ${fontFamily(config.blocks.font_family, "sans-serif")}`;
   const textWidth = columns ? `${columns * cellWidth}px` : "none";
   return `
     :root { ${vars} color-scheme: dark; }
     html, body { margin: 0; color: var(--fg); background: transparent; overflow-y: hidden; }
     body { font: ${text}; padding: 4px 0; overflow-x: auto; }
     a { color: var(--c4); }
-    pre, code { font-family: ${config.font.family}, monospace; font-size: 0.9em; }
+    pre, code { font-family: ${fontFamily(config.font.family, "monospace")}; font-size: 0.9em; }
     pre { padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }
     /* Syntax highlighting: classes are TextMate scopes, colored with the
        terminal palette so that user.css themes them too. */
