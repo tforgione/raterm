@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://git.tforgione.fr/tforgione/raterm/wiki/raw/raterm.png" alt="raterm" width="160">
+</p>
+
 # raterm
 
 A terminal emulator for Linux, written in Rust, whose screen is a web view.
