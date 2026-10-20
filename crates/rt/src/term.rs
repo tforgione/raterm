@@ -11,7 +11,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use serde::Serialize;
 
 use crate::media::Media;
-use crate::rich::{Block, Filter, Piece, Rendered};
+use crate::rich::{Block, Filter, Kind, Piece, Rendered};
 
 /// History is drained after every batch, so it only needs to hold the lines
 /// that can scroll out during one batch (at most one per input byte).
@@ -102,6 +102,8 @@ pub struct Update {
 pub struct Terminal {
     /// Bold text in one of the 8 normal colors uses its bright variant.
     pub bold_is_bright: bool,
+    /// Videos sent whole in the stream are shown, not only local files.
+    pub embedded_videos: bool,
     term: Term<Listener>,
     parser: Processor,
     term_events: Receiver<TermEvent>,
@@ -126,6 +128,7 @@ impl Terminal {
         let size = TermSize::new(cols as usize, rows as usize);
         Terminal {
             bold_is_bright: false,
+            embedded_videos: false,
             term: Term::new(config, &size, Listener(tx)),
             parser: Processor::new(),
             term_events: rx,
@@ -178,6 +181,9 @@ impl Terminal {
     fn insert(&mut self, block: Block, events: &mut Vec<Event>) {
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
             return;
+        }
+        if block.kind == Kind::Video && !block.path && !self.embedded_videos {
+            return eprintln!("rt: embedded video ignored, see [videos] embedded in the config");
         }
         let replace = block
             .id
@@ -527,6 +533,16 @@ mod tests {
         let update = term.advance(b"x\x1b]7117;html;id=p;PGI+\x07");
         assert_eq!(kinds(&update.events), ["block true"]);
         assert_eq!(term.text(), "x\n\n\n\n");
+    }
+
+    #[test]
+    fn embedded_videos_need_the_option() {
+        // "AAAA" is the base64 of three zero bytes.
+        let video = b"\x1b]7117;video;mime=video/mp4;AAAA\x07";
+        let mut term = Terminal::new(10, 4);
+        assert_eq!(kinds(&term.advance(video).events), Vec::<String>::new());
+        term.embedded_videos = true;
+        assert_eq!(kinds(&term.advance(video).events), ["block false"]);
     }
 
     #[test]
