@@ -1,0 +1,16 @@
+[?1049h[22;0;0t[>4;2m[?1h=[?2004h[1;24r[?12h[?12l[22;2t[22;1t[27m[23m[29m[m[H[2J[?25l[24;1H"crates/rt/src/pty.rs" 76 lines, 2073 bytes[1;1Huse std::io::{Read, Write};
+
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}}[4;1H;
+
+pub type Error = Box<dyn std::error::Error + Send + Sync>;
+
+pub struct Pty {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    child: Box<dyn Child + Send + Sync>,
+}
+
+impl Pty {
+    /// Spawns `program` in a new pty and returns it with a reader on its outputt[16;1H.
+    pub fn spawn([18;9Hprogram: &str,[19;9Hcols: u16,[20;9Hrows: u16,
+    ) -> Result<(Pty, Box<dyn Read + Send>), Error> {[22;9Hlet pair = native_pty_system().openpty(size(cols, rows))?;[23;9Hlet mut cmd = CommandBuilder::new(program);[?25h[1;1H[24;1H[?2004l[>4;m[23;2t[23;1t[24;1H[K[24;1H[?2004l[?1l>[?1049l[23;0;0t[>4;m
