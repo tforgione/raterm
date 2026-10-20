@@ -222,8 +222,9 @@ cargo clippy -- -D warnings
 The core (`pty`, `term`, `rich`, `media`) is a library tested without a
 window; `view` is the only module that knows about wry. Snapshot tests replay
 recorded sessions from `crates/raterm/tests/data` (recorded with `record.sh`
-there); `RATERM_UPDATE_SNAPSHOTS=1 cargo test` rewrites them. `SPEC.md`
-describes the design (in French).
+there); `RATERM_UPDATE_SNAPSHOTS=1 cargo test` rewrites them. The
+[specification](https://git.tforgione.fr/tforgione/raterm/wiki/Spec), in the
+wiki, describes the design.
 
 ## License
 

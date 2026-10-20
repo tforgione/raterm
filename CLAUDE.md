@@ -3,8 +3,9 @@
 raterm : émulateur de terminal Linux en Rust dont l'écran est une webview
 (wry/tao sur WebKitGTK), qui affiche aussi des blocs riches (Markdown, HTML,
 SVG, images, vidéos) envoyés par la séquence OSC 7117. `rat` est l'outil
-compagnon qui émet ces blocs. `SPEC.md` décrit la conception et fait foi ;
-le wiki (dépôt séparé dans `.wiki`) et le README sont la doc utilisateur.
+compagnon qui émet ces blocs. La spec (pages `Spec*` du wiki, dépôt séparé
+dans `.wiki`) décrit la conception et fait foi ; les autres pages du wiki et
+le README sont la doc utilisateur.
 
 Ce fichier est le seul en français : code, commentaires, README, wiki et
 messages de commit sont en anglais.
@@ -41,10 +42,11 @@ dans le binaire.
 - Concis plutôt qu'exhaustif ; commenter le pourquoi, pas le quoi.
 - Page en HTML/CSS/JS vanilla, un fichier par type, sans dépendance, sans
   `eval`, sans `innerHTML` avec du contenu du terminal hors des iframes.
-- Dépendances limitées à la liste de `SPEC.md` ; toute nouvelle dépendance se
-  justifie dans la spec et dans le commit.
-- Une fonctionnalité hors spec s'écrit d'abord dans `SPEC.md`. Une décision
-  structurante (sécurité, architecture) se demande, elle ne se tranche pas seul.
+- Dépendances limitées à la liste de la spec (`.wiki/Spec.md`) ; toute
+  nouvelle dépendance se justifie dans la spec et dans le commit.
+- Une fonctionnalité hors spec s'écrit d'abord dans la spec du wiki. Une
+  décision structurante (sécurité, architecture) se demande, elle ne se
+  tranche pas seul.
 - Commits atomiques, messages à l'impératif, sans trailer (pas de
   Co-Authored-By). Ne pousser que sur demande, `main` comme le wiki.
 - Les `.in`/`.out` de `tests/data` sont des captures réelles : ne jamais les
