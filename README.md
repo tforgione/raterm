@@ -7,7 +7,7 @@
 A terminal emulator for Linux, written in Rust, whose screen is a web view.
 Regular output (text, ANSI colors, cursor, full-screen programs like vim or
 htop) works as in any terminal, but programs can also insert rich blocks at the
-cursor: rendered Markdown, HTML, SVG, images and videos.
+cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 
 The original itch: reading Markdown reports with wide tables in a terminal,
 without truncation and without switching to a browser.
@@ -25,7 +25,8 @@ raterm, and falls back to plain text anywhere else.
 ## Installing
 
 raterm runs on Linux only, on X11 and Wayland. It needs WebKitGTK 4.1 and, for
-videos, GStreamer's good plugins (plus libav for H.264). On Arch Linux:
+videos and audio, GStreamer's good plugins (plus libav for H.264 and AAC). On
+Arch Linux:
 
 ```sh
 sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
@@ -82,15 +83,16 @@ rat --md -            # from stdin
 
 | Option | |
 | --- | --- |
-| `--md`, `--html`, `--svg`, `--img`, `--video` | kind of the input, instead of guessing from the extension |
+| `--md`, `--html`, `--svg`, `--img`, `--video`, `--audio` | kind of the input, instead of guessing from the extension |
 | `--width N`, `--height N` | maximum size, in columns and lines |
 | `--id NAME` | replace the previous block with the same id (progress bars, tables that fill up) |
 | `--allow-network` | download the http(s) images of a Markdown file, to inline them |
 | `--force` | emit the block even when not running in raterm |
 
-Images can be PNG, JPEG, GIF or WebP; videos MP4, WebM, MKV or OGV. A local
-video is sent by path, so it can be of any size; from stdin it is sent whole
-(8 MiB at most). Over ssh, `rat` refuses to send videos.
+Images can be PNG, JPEG, GIF or WebP; videos MP4, WebM, MKV or OGV; audio MP3,
+M4A, Ogg (Vorbis, Opus), FLAC or WAV. A local video or audio file is sent by
+path, so it can be of any size; from stdin it is sent whole (8 MiB at most).
+Over ssh, `rat` refuses to send videos and audio.
 
 Images in Markdown files are inlined by `rat` as `data:` URLs, since blocks
 can neither read files nor access the network: local images (paths relative
@@ -98,8 +100,8 @@ to the Markdown file), and with `--allow-network` http(s) images, which `rat`
 downloads itself (raterm never accesses the network). Code blocks and code
 spans are left alone.
 
-Outside raterm, `rat` prints Markdown and HTML as is, and the path of images
-and videos. Note that ssh does not forward `RATERM` by default: on a remote
+Outside raterm, `rat` prints Markdown and HTML as is, and the path of images,
+videos and audio files. Note that ssh does not forward `RATERM` by default: on a remote
 machine, `rat` only emits blocks with `--force`, or if the variable is
 forwarded (`SendEnv` on the client, `AcceptEnv` on the server).
 
@@ -180,6 +182,7 @@ ESC ] 7117 ; <kind> [; <key>=<value> ...] ; <base64> BEL
 | `svg` | an SVG document | an image |
 | `img` | image bytes, with `mime=image/...` | an image |
 | `video` | video bytes, or with `src=path` the absolute path of a local file; `mime=video/...` | a video player |
+| `audio` | as `video`, with `mime=audio/...` | an audio player |
 
 Optional keys are `w` (maximum width, in columns), `h` (maximum height, in
 lines) and `id`. Payloads over 8 MiB are dropped. raterm exports `RATERM=1` and
@@ -205,12 +208,13 @@ Programs writing to the terminal never run code in raterm:
 - HTML and Markdown blocks are rendered in sandboxed iframes, without
   `allow-scripts`. SVG is shown as an image, which runs no script either.
 - The page's content security policy forbids any network access, apart from
-  raterm's own local video server: blocks can only show their own content and
+  raterm's own local media server: blocks can only show their own content and
   inline data.
 - Links open in the desktop's handler (`xdg-open`), never in the terminal, and
   only `http`, `https` and `mailto` links.
-- Local videos are streamed by a small HTTP server on `127.0.0.1`, which only
-  serves the files announced by a video block, under a random 128-bit token.
+- Local videos and audio are streamed by a small HTTP server on `127.0.0.1`,
+  which only serves the files announced by a block, under a random 128-bit
+  token.
 
 ## Development
 

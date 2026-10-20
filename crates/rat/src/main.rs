@@ -15,7 +15,7 @@ const MAX_PAYLOAD: usize = 8 << 20;
 
 #[derive(Parser)]
 #[command(about = "Show a file as a rich block in the raterm terminal")]
-#[command(group(ArgGroup::new("kind").args(["md", "html", "svg", "img", "video"])))]
+#[command(group(ArgGroup::new("kind").args(["md", "html", "svg", "img", "video", "audio"])))]
 struct Args {
     /// File to show, or `-` for stdin.
     file: PathBuf,
@@ -35,6 +35,10 @@ struct Args {
     /// path, so it can be of any size, stdin is sent whole; refused over ssh.
     #[arg(long)]
     video: bool,
+    /// Treat the input as audio (mp3, m4a, ogg, oga, opus, flac or wav), sent
+    /// like a video.
+    #[arg(long)]
+    audio: bool,
     /// Maximum width, in columns.
     #[arg(long, value_name = "N")]
     width: Option<u16>,
@@ -80,6 +84,8 @@ fn run(args: Args) -> Result<(), String> {
         "img"
     } else if args.video {
         "video"
+    } else if args.audio {
+        "audio"
     } else {
         let ext = args.file.extension().and_then(|e| e.to_str());
         match ext.map(str::to_ascii_lowercase).as_deref() {
@@ -88,9 +94,11 @@ fn run(args: Args) -> Result<(), String> {
             Some("svg") => "svg",
             Some("png" | "jpg" | "jpeg" | "gif" | "webp") => "img",
             Some("mp4" | "m4v" | "webm" | "mkv" | "ogv") => "video",
+            Some("mp3" | "m4a" | "ogg" | "oga" | "opus" | "flac" | "wav") => "audio",
             _ => {
                 return Err(
-                    "cannot guess the kind, use --md, --html, --svg, --img or --video".into(),
+                    "cannot guess the kind, use --md, --html, --svg, --img, --video or --audio"
+                        .into(),
                 );
             }
         }
@@ -98,13 +106,14 @@ fn run(args: Args) -> Result<(), String> {
 
     let in_raterm = std::env::var_os("RATERM").is_some();
     let emit = in_raterm || args.force;
-    // Over ssh, raterm cannot read a remote file by path, and sending the video
+    let media = kind == "video" || kind == "audio";
+    // Over ssh, raterm cannot read a remote file by path, and sending the file
     // whole would push megabytes through the connection.
-    if emit && kind == "video" && std::env::var_os("SSH_CONNECTION").is_some() {
-        return Err("videos cannot be shown over ssh".into());
+    if emit && media && std::env::var_os("SSH_CONNECTION").is_some() {
+        return Err(format!("{kind} cannot be played over ssh"));
     }
-    // A local video is sent by path: raterm reads it itself, so it can be large.
-    let by_path = kind == "video" && !stdin;
+    // A local file is sent by path: raterm reads it itself, so it can be large.
+    let by_path = media && !stdin;
     let error = |e: io::Error| format!("{}: {e}", args.file.display());
     let data = if stdin {
         let mut data = Vec::new();
@@ -120,11 +129,9 @@ fn run(args: Args) -> Result<(), String> {
     }
     .map_err(error)?;
     let mime = match kind {
-        "img" | "video" => Some(
-            sniff(&data)
-                .filter(|mime| mime.starts_with(if kind == "img" { "image/" } else { "video/" }))
-                .ok_or(format!("unsupported {kind} format"))?,
-        ),
+        "img" | "video" | "audio" => {
+            Some(mime_of(kind, &data).ok_or(format!("unsupported {kind} format"))?)
+        }
         _ => None,
     };
 
@@ -155,7 +162,7 @@ fn run(args: Args) -> Result<(), String> {
                 params += &format!(";{key}={value}");
             }
         };
-        param("mime", mime.map(String::from));
+        param("mime", mime);
         param("src", by_path.then(|| "path".into()));
         param("w", args.width.map(|w| w.to_string()));
         param("h", args.height.map(|h| h.to_string()));
@@ -273,7 +280,23 @@ fn download(url: &str) -> Result<(Vec<u8>, Option<String>), ureq::Error> {
     Ok((data, content_type))
 }
 
-/// Image or video MIME type from the file's magic bytes.
+/// MIME type of an `img`, `video` or `audio` block, from the file's start.
+fn mime_of(kind: &str, data: &[u8]) -> Option<String> {
+    let mime = sniff(data)?;
+    // Audio comes in the containers of video too: an m4a file is an mp4.
+    let mime = match kind {
+        "audio" => mime.replacen("video/", "audio/", 1),
+        _ => mime.to_owned(),
+    };
+    let prefix = match kind {
+        "img" => "image/",
+        "video" => "video/",
+        _ => "audio/",
+    };
+    mime.starts_with(prefix).then_some(mime)
+}
+
+/// Image, video or audio MIME type from the file's magic bytes.
 fn sniff(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(b"\x89PNG") {
         Some("image/png")
@@ -290,6 +313,15 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
         Some("video/webm")
     } else if data.starts_with(b"OggS") {
         Some("video/ogg")
+    } else if data.starts_with(b"fLaC") {
+        Some("audio/flac")
+    } else if data.len() >= 12 && &data[..4] == b"RIFF" && &data[8..12] == b"WAVE" {
+        Some("audio/wav")
+    } else if data.starts_with(b"ID3")
+        || (data.len() >= 2 && data[0] == 0xff && data[1] & 0xe0 == 0xe0)
+    {
+        // An ID3 tag, or straight an MPEG audio frame.
+        Some("audio/mpeg")
     } else {
         None
     }
@@ -298,6 +330,20 @@ fn sniff(data: &[u8]) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_is_recognized_in_its_own_formats_and_in_video_containers() {
+        let mime = |data: &[u8]| mime_of("audio", data);
+        assert_eq!(mime(b"ID3\x04").as_deref(), Some("audio/mpeg"));
+        assert_eq!(mime(b"\xff\xfb\x90").as_deref(), Some("audio/mpeg"));
+        assert_eq!(mime(b"fLaC").as_deref(), Some("audio/flac"));
+        assert_eq!(mime(b"RIFF\0\0\0\0WAVEfmt ").as_deref(), Some("audio/wav"));
+        assert_eq!(mime(b"OggS").as_deref(), Some("audio/ogg"));
+        assert_eq!(mime(b"\0\0\0\x20ftypM4A ").as_deref(), Some("audio/mp4"));
+        assert_eq!(mime(b"\x89PNG"), None);
+        assert_eq!(mime_of("video", b"fLaC"), None);
+        assert_eq!(mime_of("video", b"OggS").as_deref(), Some("video/ogg"));
+    }
 
     #[test]
     fn local_images_are_inlined_outside_code() {

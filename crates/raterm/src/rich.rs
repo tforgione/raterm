@@ -30,6 +30,7 @@ pub enum Kind {
     Svg,
     Img,
     Video,
+    Audio,
 }
 
 #[derive(Debug, PartialEq)]
@@ -49,7 +50,7 @@ pub struct Block {
 pub struct Rendered {
     pub kind: Kind,
     /// HTML for `html` and `md`, a data URL for `svg` and `img`, a data URL
-    /// or `media/<n>` (a file of the media server) for `video`.
+    /// or `media/<n>` (a file of the media server) for `video` and `audio`.
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -175,6 +176,7 @@ fn parse(payload: &[u8]) -> Result<Block, String> {
         "svg" => Kind::Svg,
         "img" => Kind::Img,
         "video" => Kind::Video,
+        "audio" => Kind::Audio,
         other => return Err(format!("unknown kind {other:?}")),
     };
     let mut block = Block {
@@ -203,8 +205,8 @@ fn parse(payload: &[u8]) -> Result<Block, String> {
 }
 
 impl Block {
-    /// Renders the block; local files of `src=path` videos are registered in
-    /// `media`, which the view serves them from.
+    /// Renders the block; local files of `src=path` videos and audio are
+    /// registered in `media`, which the view serves them from.
     pub fn render(self, media: &Media) -> Result<Rendered, String> {
         let (content, text) = match self.kind {
             Kind::Html => (String::from_utf8_lossy(&self.data).into_owned(), None),
@@ -222,8 +224,8 @@ impl Block {
             }
             Kind::Svg => (data_url("image/svg+xml", &self.data), None),
             Kind::Img => (data_url(mime(&self, "image/")?, &self.data), None),
-            Kind::Video if self.path => {
-                let mime = mime(&self, "video/")?.to_owned();
+            Kind::Video | Kind::Audio if self.path => {
+                let mime = mime(&self, self.kind.media_type())?.to_owned();
                 let path = std::path::PathBuf::from(String::from_utf8_lossy(&self.data).as_ref());
                 if !path.is_absolute() || !path.is_file() {
                     return Err(format!(
@@ -233,7 +235,10 @@ impl Block {
                 }
                 (media.add(path, mime), None)
             }
-            Kind::Video => (data_url(mime(&self, "video/")?, &self.data), None),
+            Kind::Video | Kind::Audio => (
+                data_url(mime(&self, self.kind.media_type())?, &self.data),
+                None,
+            ),
         };
         Ok(Rendered {
             kind: self.kind,
@@ -243,6 +248,17 @@ impl Block {
             h: self.height,
             text,
         })
+    }
+}
+
+impl Kind {
+    /// The MIME type prefix of a video or audio block.
+    fn media_type(self) -> &'static str {
+        if self == Kind::Audio {
+            "audio/"
+        } else {
+            "video/"
+        }
     }
 }
 
@@ -394,6 +410,29 @@ mod tests {
         assert_eq!(media.get(0).unwrap(), (path, "video/mp4".to_owned()));
         let relative = format!("video;mime=video/mp4;src=path;{}", STANDARD.encode("a.mp4"));
         assert!(parse(relative.as_bytes()).unwrap().render(&media).is_err());
+    }
+
+    #[test]
+    fn audio_is_a_media_of_its_own_type() {
+        let path = std::env::current_exe().unwrap();
+        let payload = format!(
+            "audio;mime=audio/ogg;src=path;{}",
+            STANDARD.encode(path.to_str().unwrap())
+        );
+        let media = Media::default();
+        let rendered = parse(payload.as_bytes()).unwrap().render(&media).unwrap();
+        assert_eq!(
+            (rendered.kind, rendered.content.as_str()),
+            (Kind::Audio, "media/0")
+        );
+        assert_eq!(media.get(0).unwrap(), (path, "audio/ogg".to_owned()));
+        let inline = parse(b"audio;mime=audio/mpeg;AQI=").unwrap();
+        assert_eq!(
+            inline.render(&media).unwrap().content,
+            "data:audio/mpeg;base64,AQI="
+        );
+        let video_type = parse(b"audio;mime=video/mp4;AQI=").unwrap();
+        assert!(video_type.render(&media).is_err());
     }
 
     #[test]

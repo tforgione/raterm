@@ -335,17 +335,17 @@ function richBlock(ev) {
   if (ev.text) div.dataset.text = ev.text;
   if (ev.w) div.style.maxWidth = `${ev.w}ch`;
   let lines = ev.h;
-  if (ev.kind === "video") {
-    const video = document.createElement("video");
-    video.controls = true;
-    video.preload = "metadata";
-    video.addEventListener("loadedmetadata", follow);
+  if (ev.kind === "video" || ev.kind === "audio") {
+    const player = document.createElement(ev.kind);
+    player.controls = true;
+    player.preload = "metadata";
+    player.addEventListener("loadedmetadata", follow);
     // Local files are streamed by raterm's media server, the rest are data: URLs.
-    video.src = ev.content.startsWith("media/") ? ratermMedia + ev.content.slice("media/".length) : ev.content;
-    const limit = config.images.max_height;
+    player.src = ev.content.startsWith("media/") ? ratermMedia + ev.content.slice("media/".length) : ev.content;
+    const limit = ev.kind === "video" && config.images.max_height;
     if (limit) lines = Math.min(lines ?? limit, limit);
-    if (lines) video.style.maxHeight = `${lines}lh`;
-    div.append(video);
+    if (lines && ev.kind === "video") player.style.maxHeight = `${lines}lh`;
+    div.append(player);
     return div;
   }
   if (ev.kind === "img" || ev.kind === "svg") {

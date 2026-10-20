@@ -1,8 +1,8 @@
-//! Local files shown by video blocks, streamed to the view over HTTP.
+//! Local files of video and audio blocks, streamed to the view over HTTP.
 //!
 //! WebKit's media player only reads http(s), data: and blob: URLs, neither
 //! raterm:// nor file://. Files are served on 127.0.0.1, under a random token,
-//! and only those announced by a video block, by index: no other process can
+//! and only those announced by a block, by index: no other process can
 //! use the server, and no block can make it read an arbitrary path.
 
 use std::fs::File;
@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-/// Files announced by video blocks.
+/// Files announced by video and audio blocks.
 #[derive(Clone, Default)]
 pub struct Media(Arc<Mutex<Vec<(PathBuf, String)>>>);
 

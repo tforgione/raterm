@@ -154,7 +154,7 @@ html, body {
   cursor: zoom-in;
 }
 
-.rich video {
+.rich video, .rich audio {
   display: block;
   max-width: 100%;
 }
