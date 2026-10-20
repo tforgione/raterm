@@ -7,6 +7,5 @@ fn main() -> Result<(), rt::pty::Error> {
         // SAFETY: no other thread exists yet.
         unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
     }
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    view::run(&shell)
+    view::run(rt::config::Config::load())
 }

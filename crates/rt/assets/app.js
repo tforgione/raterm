@@ -4,7 +4,28 @@ const flow = document.getElementById("flow");
 const screen = document.getElementById("screen");
 const alt = document.getElementById("alt");
 const input = document.getElementById("input");
+const searchBox = document.getElementById("search");
 const send = (msg) => window.ipc.postMessage(JSON.stringify(msg));
+
+// Configuration (rtConfig comes from config.js, generated from config.toml)
+
+const config = rtConfig;
+const root = document.documentElement;
+root.style.setProperty("--font-family", `${config.font.family}, monospace`);
+document.body.classList.add(`cursor-${config.cursor.style}`);
+if (config.cursor.blink) {
+  setInterval(() => document.body.classList.toggle("blink-off"), 530);
+}
+window.addEventListener("blur", () => document.body.classList.add("unfocused"));
+window.addEventListener("focus", () => document.body.classList.remove("unfocused"));
+
+let zoom = 0;
+
+function setZoom(level) {
+  zoom = level;
+  root.style.setProperty("--font-size", `${config.font.size * 1.1 ** zoom}pt`);
+  resize();
+}
 
 let queue = [];
 let appCursor = false;
@@ -32,6 +53,7 @@ function apply(ev) {
       line.append(...spans(ev.line.runs));
       if (!wrapped) flow.insertBefore(line, screen);
       wrapped = ev.line.wrap ? line : null;
+      trimScrollback();
       break;
     }
     case "lines": {
@@ -57,8 +79,12 @@ function apply(ev) {
       if (old) old.replaceWith(block);
       else flow.insertBefore(block, screen);
       wrapped = null;
+      trimScrollback();
       break;
     }
+    case "title":
+      if (config.dynamic_title) document.title = ev.title;
+      break;
   }
 }
 
@@ -155,6 +181,11 @@ function collapseTrailing(grid) {
   }
 }
 
+function trimScrollback() {
+  // Every child but the screen is a scrollback line or a rich block.
+  while (flow.children.length - 1 > config.scrollback) flow.firstElementChild.remove();
+}
+
 function newLine() {
   const div = document.createElement("div");
   div.className = "line";
@@ -168,6 +199,10 @@ function spans(runs) {
     if (run.class) span.className = run.class;
     if (run.fg) span.style.color = run.fg;
     if (run.bg) span.style.backgroundColor = run.bg;
+    if (run.link) {
+      span.classList.add("link");
+      span.dataset.href = run.link;
+    }
     return span;
   });
 }
@@ -209,7 +244,7 @@ function resize() {
 }
 
 window.addEventListener("resize", () => requestAnimationFrame(resize));
-resize();
+setZoom(0);
 
 // Keyboard
 
@@ -248,24 +283,175 @@ function encode(e) {
   return e.altKey ? esc + e.key : null;
 }
 
-function shortcut(e) {
-  const key = e.key.toLowerCase();
-  if (e.ctrlKey && e.shiftKey && key === "c") {
-    document.execCommand("copy");
-  } else if (e.ctrlKey && e.shiftKey && key === "v") {
-    input.focus();
-    document.execCommand("paste");
-  } else if (e.shiftKey && (e.key === "PageUp" || e.key === "PageDown")) {
-    flow.scrollBy(0, (e.key === "PageUp" ? -0.9 : 0.9) * flow.clientHeight);
-  } else {
-    return false;
+// Shortcuts
+
+const MODIFIERS = ["ctrl", "alt", "shift", "super"];
+
+const DEFAULT_KEYS = {
+  "ctrl+shift+c": "copy",
+  "ctrl+shift+v": "paste",
+  "shift+insert": "paste_selection",
+  "ctrl+shift+f": "search",
+  "ctrl+=": "zoom_in",
+  "ctrl++": "zoom_in",
+  "ctrl+-": "zoom_out",
+  "ctrl+0": "zoom_reset",
+  "shift+pageup": "scroll_page_up",
+  "shift+pagedown": "scroll_page_down",
+};
+
+/// Canonical form of a shortcut such as "Shift+Ctrl+C": "ctrl+shift+c".
+function normalize(spec) {
+  const parts = spec.toLowerCase().split("+");
+  let key = parts.pop();
+  if (key === "") {
+    parts.pop();
+    key = "+";
+  }
+  return [...MODIFIERS.filter((m) => parts.includes(m)), key].join("+");
+}
+
+const keys = Object.fromEntries(
+  Object.entries({ ...DEFAULT_KEYS, ...config.keys }).map(([spec, binding]) => [normalize(spec), binding]),
+);
+
+function keyName(e) {
+  // Digits by position, so that ctrl+0 works on layouts where 0 is shifted.
+  let key = /^(Digit|Numpad)/.test(e.code) ? e.code.replace("Digit", "") : e.key;
+  if (key === " ") key = "space";
+  const mods = [e.ctrlKey, e.altKey, e.shiftKey, e.metaKey];
+  return normalize([...MODIFIERS.filter((_, i) => mods[i]), key].join("+"));
+}
+
+/// Runs a bound action; false lets the key reach the program instead.
+function runAction(binding) {
+  if (typeof binding === "object") {
+    type(binding.send);
+    return true;
+  }
+  switch (binding) {
+    case "copy":
+      document.execCommand("copy");
+      break;
+    case "paste":
+      input.focus();
+      document.execCommand("paste");
+      break;
+    case "paste_selection":
+      send({ type: "paste_primary" });
+      break;
+    case "search":
+      openSearch();
+      break;
+    case "zoom_in":
+      setZoom(zoom + 1);
+      break;
+    case "zoom_out":
+      setZoom(zoom - 1);
+      break;
+    case "zoom_reset":
+      setZoom(0);
+      break;
+    case "scroll_page_up":
+    case "scroll_page_down":
+      // The alternate screen has no scrollback: the program gets the key.
+      if (altOn) return false;
+      flow.scrollBy(0, (binding === "scroll_page_up" ? -0.9 : 0.9) * flow.clientHeight);
+      break;
+    case "new_window":
+      send({ type: "new_window" });
+      break;
+    default:
+      return false;
   }
   return true;
 }
 
+// Search, highlighted with the CSS Custom Highlight API so that neither the
+// selection, the focus nor the DOM change.
+
+const searchInput = searchBox.querySelector("input");
+let matches = [];
+let current = -1;
+
+function openSearch() {
+  searchBox.hidden = false;
+  searchInput.select();
+  searchInput.focus();
+}
+
+function closeSearch() {
+  searchBox.hidden = true;
+  CSS.highlights.clear();
+  matches = [];
+  input.focus();
+}
+
+function findAll(query) {
+  const needle = query.toLowerCase();
+  const found = [];
+  if (!needle) return found;
+  for (const line of flow.querySelectorAll(".line:not([hidden])")) {
+    const text = line.textContent.toLowerCase();
+    for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + needle.length)) {
+      found.push(rangeIn(line, i, i + needle.length));
+    }
+  }
+  return found;
+}
+
+/// Range over characters start..end of the text of `el`, across its spans.
+function rangeIn(el, start, end) {
+  const range = document.createRange();
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let pos = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const next = pos + node.length;
+    if (start >= pos && start < next) range.setStart(node, start - pos);
+    if (end > pos && end <= next) {
+      range.setEnd(node, end - pos);
+      break;
+    }
+    pos = next;
+  }
+  return range;
+}
+
+/// Moves to the previous (older) match, or the next one.
+function step(backwards) {
+  searchBox.classList.toggle("none", !matches.length && searchInput.value !== "");
+  if (!matches.length) return CSS.highlights.clear();
+  current = (current + (backwards ? -1 : 1) + matches.length) % matches.length;
+  CSS.highlights.set("search", new Highlight(...matches));
+  CSS.highlights.set("search-current", new Highlight(matches[current]));
+  matches[current].startContainer.parentElement.scrollIntoView({ block: "center" });
+}
+
+searchInput.addEventListener("input", () => {
+  matches = findAll(searchInput.value);
+  current = matches.length;
+  step(true);
+});
+
+searchInput.addEventListener("keydown", (e) => {
+  e.stopPropagation();
+  if (e.key === "Escape") closeSearch();
+  else if (e.key === "Enter") {
+    // Output may have changed since the last search.
+    const at = current;
+    matches = findAll(searchInput.value);
+    current = Math.min(at, matches.length);
+    step(!e.shiftKey);
+  } else return;
+  e.preventDefault();
+});
+
+// Keyboard
+
 document.addEventListener("keydown", (e) => {
   if (e.isComposing) return;
-  if (shortcut(e)) {
+  const binding = keys[keyName(e)];
+  if (binding !== undefined && runAction(binding)) {
     e.preventDefault();
     return;
   }
@@ -306,8 +492,24 @@ input.addEventListener("paste", (e) => {
 });
 
 // Keep the keyboard on the textarea, except while a selection exists (focusing
-// would clear it before it can be copied).
-document.addEventListener("mouseup", () => {
-  if (window.getSelection().isCollapsed) input.focus({ preventScroll: true });
+// would clear it before it can be copied) or the search box is used.
+document.addEventListener("mouseup", (e) => {
+  if (window.getSelection().isCollapsed && !searchBox.contains(e.target)) {
+    input.focus({ preventScroll: true });
+  }
+});
+
+// Middle click pastes the primary selection, as everywhere on Linux.
+document.addEventListener("auxclick", (e) => {
+  if (e.button === 1) {
+    e.preventDefault();
+    send({ type: "paste_primary" });
+  }
+});
+
+// Ctrl+click opens links (a plain click is left to selecting text).
+document.addEventListener("click", (e) => {
+  const link = e.ctrlKey && e.target.closest?.("[data-href]");
+  if (link) send({ type: "open_url", url: link.dataset.href });
 });
 input.focus();

@@ -42,6 +42,12 @@ impl Pty {
         self.writer.flush()
     }
 
+    /// Current directory of the program, read from procfs.
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        let pid = self.child.process_id()?;
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
     pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Error> {
         Ok(self.master.resize(size(cols, rows))?)
     }

@@ -1,6 +1,7 @@
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
+use crate::config::Config;
 use crate::pty::{Error, Pty};
 use crate::term::{Event, Terminal, Update};
 
@@ -15,14 +16,16 @@ pub struct Session {
 
 impl Session {
     pub fn spawn(
-        shell: &str,
+        config: &Config,
         cols: u16,
         rows: u16,
     ) -> Result<(Arc<Session>, Box<dyn Read + Send>), Error> {
-        let (pty, reader) = Pty::spawn(shell, cols, rows)?;
+        let (pty, reader) = Pty::spawn(&config.shell(), cols, rows)?;
+        let mut term = Terminal::new(cols, rows);
+        term.bold_is_bright = config.bold_is_bright;
         let session = Session {
             pty: Mutex::new(pty),
-            term: Mutex::new(Terminal::new(cols, rows)),
+            term: Mutex::new(term),
         };
         Ok((Arc::new(session), reader))
     }
@@ -31,6 +34,10 @@ impl Session {
         if let Err(e) = self.pty.lock().unwrap().write(data) {
             eprintln!("rt: pty write failed: {e}");
         }
+    }
+
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        self.pty.lock().unwrap().cwd()
     }
 
     pub fn paste(&self, text: &str) {

@@ -1,3 +1,4 @@
+pub mod config;
 pub mod pty;
 pub mod rich;
 pub mod session;
