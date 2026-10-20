@@ -71,6 +71,7 @@ raterm --title NAME -e COMMAND ARGS...  # same options as alacritty
 | `Shift+PageUp` / `Shift+PageDown` | scroll the scrollback (sent to the program on the alternate screen) |
 | `Ctrl+click` | open a link (rich block links open on a plain click) |
 | click on an image | show it full window (`Esc` or any click to close) |
+| `Shift`+click or drag | select text even in programs that use the mouse (vim, htop, tmux) |
 
 ## rat
 

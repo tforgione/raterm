@@ -54,7 +54,8 @@ function setZoom(level) {
 }
 
 let queue = [];
-let appCursor = false;
+// Same initial modes as the core's terminal (see Modes::of).
+let modes = { app_cursor: false, mouse: 0, sgr_mouse: false, alt_scroll: true };
 let altOn = false;
 // Last scrollback line when it soft-wraps, so its continuation joins it.
 let wrapped = null;
@@ -97,7 +98,7 @@ function apply(ev) {
       alt.replaceChildren();
       break;
     case "mode":
-      appCursor = ev.app_cursor;
+      modes = ev;
       break;
     case "block": {
       const block = richBlock(ev);
@@ -366,7 +367,7 @@ setZoom(0);
 function csi(final, mod, tilde) {
   if (tilde) return mod > 1 ? `\x1b[${final};${mod}~` : `\x1b[${final}~`;
   if (mod > 1) return `\x1b[1;${mod}${final}`;
-  return (appCursor ? "\x1bO" : "\x1b[") + final;
+  return (modes.app_cursor ? "\x1bO" : "\x1b[") + final;
 }
 
 const CURSOR_KEYS = { ArrowUp: "A", ArrowDown: "B", ArrowRight: "C", ArrowLeft: "D", Home: "H", End: "F" };
@@ -646,8 +647,88 @@ document.addEventListener("mouseup", (e) => {
   }
 });
 
+// Mouse reporting: programs that ask for it (vim, htop, tmux...) get clicks,
+// drags and the wheel over the grid. Shift keeps the mouse for selecting.
+
+let pressed = null;
+let lastCell = null;
+
+/// The grid cell under the pointer, or null outside the grid.
+function cellAt(e) {
+  const first = (altOn ? alt : screen).firstElementChild;
+  if (!first) return null;
+  const origin = first.getBoundingClientRect();
+  const x = Math.floor((e.clientX - origin.left) / cellWidth);
+  const y = Math.floor((e.clientY - origin.top) / origin.height);
+  return x >= 0 && y >= 0 && x < size.cols && y < size.rows ? { x, y } : null;
+}
+
+function reporting(e) {
+  return modes.mouse > 0 && !e.shiftKey && viewer.hidden && cellAt(e) !== null;
+}
+
+/// xterm's encoding of a mouse event: `button` is 0-2 for the buttons, 64-65
+/// for the wheel, plus 32 for motion.
+function sendMouse(e, button, cell, release) {
+  const code = button + 4 * e.shiftKey + 8 * e.altKey + 16 * e.ctrlKey;
+  if (modes.sgr_mouse) {
+    send({ type: "input", data: `\x1b[<${code};${cell.x + 1};${cell.y + 1}${release ? "m" : "M"}` });
+  } else if (cell.x < 223 && cell.y < 223) {
+    // The legacy encoding has no release per button, and stops at 223.
+    const b = release ? (code & ~3) | 3 : code;
+    send({ type: "input", data: "\x1b[M" + String.fromCharCode(32 + b, 33 + cell.x, 33 + cell.y) });
+  }
+}
+
+document.addEventListener("mousedown", (e) => {
+  if (!reporting(e) || e.button > 2) return;
+  // No selection, and the keyboard stays on the terminal.
+  e.preventDefault();
+  pressed = e.button;
+  lastCell = cellAt(e);
+  sendMouse(e, pressed, lastCell, false);
+});
+
+document.addEventListener("mouseup", (e) => {
+  if (pressed === null) return;
+  const cell = cellAt(e) ?? lastCell;
+  sendMouse(e, pressed, cell, true);
+  pressed = null;
+});
+
+document.addEventListener("mousemove", (e) => {
+  if (modes.mouse < 2 || (modes.mouse === 2 && pressed === null) || e.shiftKey) return;
+  const cell = cellAt(e);
+  if (!cell || (lastCell && cell.x === lastCell.x && cell.y === lastCell.y)) return;
+  lastCell = cell;
+  sendMouse(e, 32 + (pressed ?? 3), cell, false);
+});
+
+document.addEventListener(
+  "wheel",
+  (e) => {
+    if (!e.deltaY) return;
+    if (reporting(e)) {
+      sendMouse(e, e.deltaY < 0 ? 64 : 65, cellAt(e), false);
+    } else if (altOn && modes.alt_scroll && !e.shiftKey) {
+      // Full-screen programs without mouse reporting (less, man) scroll with
+      // arrow keys.
+      send({ type: "input", data: csi(e.deltaY < 0 ? "A" : "B", 1).repeat(3) });
+    } else {
+      return;
+    }
+    e.preventDefault();
+  },
+  { passive: false },
+);
+
+document.addEventListener("contextmenu", (e) => {
+  if (reporting(e)) e.preventDefault();
+});
+
 // Middle click pastes the primary selection, as everywhere on Linux.
 document.addEventListener("auxclick", (e) => {
+  if (e.button === 1 && reporting(e)) return;
   if (e.button === 1) {
     e.preventDefault();
     send({ type: "paste_primary" });

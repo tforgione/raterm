@@ -24,7 +24,7 @@
 
 --- events
 {"type":"alt","on":true}
-{"type":"mode","app_cursor":true}
+{"type":"mode","app_cursor":true,"mouse":0,"sgr_mouse":false,"alt_scroll":true}
 {"type":"lines","height":24,"rows":[{"y":0,"runs":[{"text":"use std::io::{Read, Write};"}]},{"y":1,"runs":[]},{"y":2,"runs":[{"text":"use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, nati"}]},{"y":3,"runs":[]},{"y":4,"runs":[]},{"y":5,"runs":[]},{"y":6,"runs":[]},{"y":7,"runs":[]},{"y":8,"runs":[]},{"y":9,"runs":[]},{"y":10,"runs":[]},{"y":11,"runs":[]},{"y":12,"runs":[]},{"y":13,"runs":[]},{"y":14,"runs":[]},{"y":15,"runs":[]},{"y":16,"runs":[]},{"y":17,"runs":[]},{"y":18,"runs":[]},{"y":19,"runs":[]},{"y":20,"runs":[]},{"y":21,"runs":[]},{"y":22,"runs":[]},{"y":23,"runs":[{"text":"\"crates/rt/src/pty.rs\" 76 lines, 2073 bytes"}]}]}
 {"type":"lines","height":24,"rows":[{"y":2,"runs":[{"text":"use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}"}],"wrap":true},{"y":3,"runs":[{"text":";"}]},{"y":5,"runs":[{"text":"pub type Error = Box<dyn std::error::Error + Send + Sync>;"}]},{"y":7,"runs":[{"text":"pub struct Pty {"}]},{"y":8,"runs":[{"text":"    master: Box<dyn MasterPty + Send>,"}]},{"y":9,"runs":[{"text":"    writer: Box<dyn Write + Send>,"}]},{"y":10,"runs":[{"text":"    child: Box<dyn Child + Send + Sync>,"}]},{"y":11,"runs":[{"text":"}"}]},{"y":13,"runs":[{"text":"impl Pty {"}]},{"y":14,"runs":[{"text":"    /// Spawns"}]}]}
 {"type":"lines","height":24,"rows":[{"y":14,"runs":[{"text":"    /// Spawns `program` in a new pty and returns it with a reader on its output"}],"wrap":true},{"y":15,"runs":[{"text":"."}]},{"y":16,"runs":[{"text":"    pub fn spawn("}]},{"y":17,"runs":[{"text":"        program: &str,"}]},{"y":18,"runs":[{"text":"        cols: u16,"}]},{"y":19,"runs":[{"text":"        rows: u16,"}]},{"y":20,"runs":[{"text":"    ) -> Result<(Pty, Box<dyn Read + Send>), Error> {"}]},{"y":21,"runs":[{"text":"        let pair = native_pty_system().openpty(size(co"}]}]}
@@ -32,5 +32,5 @@
 {"type":"title","title":""}
 {"type":"title","title":""}
 {"type":"alt","on":false}
-{"type":"mode","app_cursor":false}
+{"type":"mode","app_cursor":false,"mouse":0,"sgr_mouse":false,"alt_scroll":true}
 {"type":"lines","height":24,"rows":[{"y":0,"runs":[]},{"y":1,"runs":[{"text":" ","class":"cursor"}]},{"y":2,"runs":[]},{"y":3,"runs":[]},{"y":4,"runs":[]},{"y":5,"runs":[]},{"y":6,"runs":[]},{"y":7,"runs":[]},{"y":8,"runs":[]},{"y":9,"runs":[]},{"y":10,"runs":[]},{"y":11,"runs":[]},{"y":12,"runs":[]},{"y":13,"runs":[]},{"y":14,"runs":[]},{"y":15,"runs":[]},{"y":16,"runs":[]},{"y":17,"runs":[]},{"y":18,"runs":[]},{"y":19,"runs":[]},{"y":20,"runs":[]},{"y":21,"runs":[]},{"y":22,"runs":[]},{"y":23,"runs":[]}]}

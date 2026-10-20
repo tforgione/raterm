@@ -32,9 +32,8 @@ pub enum Event {
     Alt {
         on: bool,
     },
-    Mode {
-        app_cursor: bool,
-    },
+    /// Modes that change how the view encodes input.
+    Mode(Modes),
     /// Window title set by the program (OSC 0/2); empty to reset it.
     Title {
         title: String,
@@ -47,6 +46,37 @@ pub enum Event {
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         replace: bool,
     },
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Default)]
+pub struct Modes {
+    /// Arrow keys send `ESC O` sequences.
+    pub app_cursor: bool,
+    /// Mouse events the program asked for: 0 none, 1 clicks, 2 clicks and
+    /// drags, 3 clicks and any motion.
+    pub mouse: u8,
+    /// Mouse events use the SGR encoding (1006) rather than the legacy one.
+    pub sgr_mouse: bool,
+    /// Without mouse reporting, the wheel sends arrow keys on the alternate
+    /// screen (1007).
+    pub alt_scroll: bool,
+}
+
+impl Modes {
+    fn of(mode: &TermMode) -> Modes {
+        Modes {
+            app_cursor: mode.contains(TermMode::APP_CURSOR),
+            mouse: if mode.contains(TermMode::MOUSE_MOTION) {
+                3
+            } else if mode.contains(TermMode::MOUSE_DRAG) {
+                2
+            } else {
+                mode.contains(TermMode::MOUSE_REPORT_CLICK).into()
+            },
+            sgr_mouse: mode.contains(TermMode::SGR_MOUSE),
+            alt_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
+        }
+    }
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -113,7 +143,8 @@ pub struct Terminal {
     /// Screen as last sent to the view.
     screen: Vec<Line>,
     alt: bool,
-    app_cursor: bool,
+    /// Modes as last sent to the view.
+    modes: Modes,
 }
 
 impl Terminal {
@@ -124,9 +155,12 @@ impl Terminal {
             ..Config::default()
         };
         let size = TermSize::new(cols as usize, rows as usize);
+        let term = Term::new(config, &size, Listener(tx));
         Terminal {
             bold_is_bright: false,
-            term: Term::new(config, &size, Listener(tx)),
+            // The view starts from the same modes (see app.js).
+            modes: Modes::of(term.mode()),
+            term,
             parser: Processor::new(),
             term_events: rx,
             filter: Filter::default(),
@@ -134,7 +168,6 @@ impl Terminal {
             ids: HashSet::new(),
             screen: Vec::new(),
             alt: false,
-            app_cursor: false,
         }
     }
 
@@ -238,10 +271,10 @@ impl Terminal {
             self.screen.clear();
             update.events.push(Event::Alt { on: alt });
         }
-        let app_cursor = mode.contains(TermMode::APP_CURSOR);
-        if app_cursor != self.app_cursor {
-            self.app_cursor = app_cursor;
-            update.events.push(Event::Mode { app_cursor });
+        let modes = Modes::of(&mode);
+        if modes != self.modes {
+            self.modes = modes;
+            update.events.push(Event::Mode(modes));
         }
 
         self.drain_history(&mut update.events);
@@ -537,6 +570,17 @@ mod tests {
         let update = term.advance(b"\x1b[?1049h\x1b]7117;html;PGI+\x07x");
         assert_eq!(kinds(&update.events), Vec::<String>::new());
         assert_eq!(term.text(), "x\n\n");
+    }
+
+    #[test]
+    fn mouse_modes_are_reported() {
+        let mut term = Terminal::new(10, 2);
+        term.advance(b"x");
+        let update = term.advance(b"\x1b[?1002h\x1b[?1006h");
+        let [Event::Mode(modes), ..] = &update.events[..] else {
+            panic!("{:?}", update.events)
+        };
+        assert_eq!((modes.mouse, modes.sgr_mouse), (2, true));
     }
 
     #[test]
