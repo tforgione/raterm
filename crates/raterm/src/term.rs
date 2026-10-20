@@ -13,9 +13,14 @@ use crate::history::{self, Entry, History, Numbered, WINDOW};
 use crate::media::Media;
 use crate::rich::{Block, Filter, Piece, Rendered};
 
-/// History is drained after every batch, so it only needs to hold the lines
-/// that can scroll out during one batch (at most one per input byte).
+/// History is drained every `CHUNK` bytes, so it only needs to hold the lines
+/// that can scroll out meanwhile (one per byte, more with `CSI S`).
 const HISTORY: usize = 1 << 16;
+
+/// Past 1,000 rows of history, alacritty frees the rows it drops, and
+/// allocates them again as the next lines scroll out: draining at least that
+/// often keeps them for reuse.
+const CHUNK: usize = 1000;
 
 #[derive(Serialize, Debug, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -196,7 +201,12 @@ impl Terminal {
         let mut events = Vec::new();
         for piece in self.filter.feed(bytes) {
             match piece {
-                Piece::Bytes(bytes) => self.parser.advance(&mut self.term, &bytes),
+                Piece::Bytes(bytes) => {
+                    for chunk in bytes.chunks(CHUNK) {
+                        self.parser.advance(&mut self.term, chunk);
+                        self.drain_history(&mut events);
+                    }
+                }
                 Piece::Block(block) => self.insert(block, &mut events),
             }
         }
@@ -336,8 +346,7 @@ impl Terminal {
     }
 
     /// Moves the rows that scrolled out of the main screen to the scrollback,
-    /// and emits the last `WINDOW` entries of them: the page would drop the
-    /// older ones before showing them.
+    /// and emits them.
     ///
     /// The alternate grid has no history, so this only ever drains the main
     /// screen; lines pushed while the alternate screen is active show up on
@@ -349,16 +358,10 @@ impl Terminal {
             .map(|i| self.render(&grid[GridLine(-i)], None))
             .collect();
         self.term.grid_mut().clear_history();
-        let rows: Vec<(u64, Line)> = rows
-            .into_iter()
-            .map(|line| (self.history.push_row(line.clone()), line))
-            .collect();
-        let shown = self.history.next().saturating_sub(WINDOW as u64);
-        events.extend(
-            rows.into_iter()
-                .filter(|&(entry, _)| entry >= shown)
-                .map(|(entry, line)| Event::ScrollOut { entry, line }),
-        );
+        events.extend(rows.into_iter().map(|line| Event::ScrollOut {
+            entry: self.history.push_row(line.clone()),
+            line,
+        }));
     }
 
     fn update(&mut self, events: Vec<Event>) -> Update {
@@ -391,6 +394,12 @@ impl Terminal {
         }
 
         self.drain_history(&mut update.events);
+        // The page would drop the entries before the last `WINDOW` before
+        // showing them.
+        let shown = self.history.next().saturating_sub(WINDOW as u64);
+        update
+            .events
+            .retain(|e| !matches!(e, Event::ScrollOut { entry, .. } if *entry < shown));
 
         let grid = self.term.grid();
         let cursor = mode
