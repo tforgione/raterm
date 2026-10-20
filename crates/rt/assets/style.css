@@ -19,6 +19,9 @@
   --c13: #da9cf0;
   --c14: #7fd4de;
   --c15: #ffffff;
+  /* Must match the rich blocks' color-scheme: an iframe whose scheme differs
+     from its parent gets an opaque background instead of a transparent one. */
+  color-scheme: dark;
   /* Set from config.toml. */
   --font-family: monospace;
   --font-size: 10.5pt;
