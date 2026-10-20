@@ -161,7 +161,7 @@ function richBlock(ev) {
 /// Stylesheet of rich blocks, using the terminal's current colors.
 function richStyle() {
   const root = getComputedStyle(document.documentElement);
-  const vars = ["--fg", "--bg", "--selection", "--selection-text", "--c4", "--c8"]
+  const vars = ["--fg", "--bg", "--selection", "--selection-text", "--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c8"]
     .map((name) => `${name}: ${root.getPropertyValue(name)};`)
     .join(" ");
   const columns = config.markdown.max_width;
@@ -173,6 +173,17 @@ function richStyle() {
     a { color: var(--c4); }
     pre, code { font-family: monospace; }
     pre { padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }
+    /* Syntax highlighting: classes are TextMate scopes, colored with the
+       terminal palette so that user.css themes them too. */
+    .comment { color: var(--c8); font-style: italic; }
+    .string { color: var(--c2); }
+    .constant { color: var(--c3); }
+    .keyword, .storage { color: var(--c5); }
+    .keyword.operator { color: inherit; }
+    .entity.name.function, .support.function { color: var(--c4); }
+    .entity.name.type, .entity.name.class, .support.type, .support.class { color: var(--c6); }
+    .entity.name.tag { color: var(--c1); }
+    .entity.other.attribute-name { color: var(--c3); }
     table { border-collapse: collapse; margin: 8px 0; }
     th, td { border: 1px solid var(--c8); padding: 4px 10px; text-align: left; vertical-align: top; }
     th { background: rgba(255, 255, 255, 0.08); }

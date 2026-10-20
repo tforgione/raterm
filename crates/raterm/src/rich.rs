@@ -1,7 +1,10 @@
 //! Rich output blocks, sent by programs as `ESC ] 7117 ; kind [; k=v]* ; base64 BEL`.
 
+use std::sync::OnceLock;
+
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
+use comrak::plugins::syntect::SyntectAdapter;
 use serde::Serialize;
 
 use crate::media::Media;
@@ -212,7 +215,10 @@ impl Block {
                 options.extension.autolink = true;
                 // Raw HTML is fine: the result is sandboxed exactly like `html`.
                 options.render.r#unsafe = true;
-                (comrak::markdown_to_html(&source, &options), Some(source))
+                let mut plugins = comrak::options::Plugins::default();
+                plugins.render.codefence_syntax_highlighter = Some(highlighter());
+                let html = comrak::markdown_to_html_with_plugins(&source, &options, &plugins);
+                (html, Some(source))
             }
             Kind::Svg => (data_url("image/svg+xml", &self.data), None),
             Kind::Img => (data_url(mime(&self, "image/")?, &self.data), None),
@@ -252,6 +258,14 @@ fn mime<'a>(block: &'a Block, prefix: &str) -> Result<&'a str, String> {
     valid
         .then_some(mime)
         .ok_or_else(|| format!("bad mime {mime:?}"))
+}
+
+/// Highlights fenced code blocks with CSS classes named after syntax scopes
+/// (`keyword`, `string`...), which the view colors with the terminal palette.
+/// Loading the syntax definitions takes a while: only once.
+fn highlighter() -> &'static SyntectAdapter {
+    static HIGHLIGHTER: OnceLock<SyntectAdapter> = OnceLock::new();
+    HIGHLIGHTER.get_or_init(|| SyntectAdapter::new(None))
 }
 
 fn data_url(mime: &str, data: &[u8]) -> String {
@@ -344,6 +358,18 @@ mod tests {
         let rendered = b.render(&Media::default()).unwrap();
         assert!(rendered.content.contains("<table>"));
         assert_eq!(rendered.text.as_deref(), Some("|a|b|\n|-|-|\n|1|2|\n"));
+    }
+
+    #[test]
+    fn code_blocks_are_highlighted() {
+        let Piece::Block(b) = block(Kind::Md, b"```rust\nfn main() {}\n```\n") else {
+            unreachable!()
+        };
+        let html = b.render(&Media::default()).unwrap().content;
+        assert!(
+            html.contains(r#"<span class="storage type function rust">fn</span>"#),
+            "{html}"
+        );
     }
 
     #[test]

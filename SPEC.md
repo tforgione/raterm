@@ -151,7 +151,7 @@ M2 est le cœur de la valeur ; si M1 prend trop de temps, on accepte un M1 dégr
 ## Contraintes techniques et conventions
 
 - Rust stable, édition 2024, `cargo clippy -- -D warnings` et `cargo fmt --check` propres à chaque commit.
-- Crates imposées : `wry` + `tao` (fenêtre et webview, déjà utilisées dans le projet webapp), `portable-pty`, `alacritty_terminal`, `comrak` (Markdown, avec l'extension `table`), `base64`, `serde`/`serde_json`, `clap` pour `rat` et les options de `raterm`, `toml` pour la config, `gtk` pour la sélection primaire (déjà tirée par `tao`, même version). Pas d'autre dépendance sans justification dans le commit.
+- Crates imposées : `wry` + `tao` (fenêtre et webview, déjà utilisées dans le projet webapp), `portable-pty`, `alacritty_terminal`, `comrak` (Markdown, avec l'extension `table`, et sa fonctionnalité `syntect-fancy` pour colorer les blocs de code côté Rust, les blocs n'exécutant pas de script : `syntect` en Rust pur, environ 3 Mo de définitions de langages), `base64`, `serde`/`serde_json`, `clap` pour `rat` et les options de `raterm`, `toml` pour la config, `gtk` pour la sélection primaire (déjà tirée par `tao`, même version). Pas d'autre dépendance sans justification dans le commit.
 - Cible : Linux uniquement, X11 et Wayland via WebKitGTK (ce que wry utilise sur Linux). Pas de code spécifique à macOS ou Windows, pas de `cfg` morts.
 - Frontend : HTML/CSS/JS vanilla, un seul fichier par type, pas de Node, pas de bundler, pas de dépendance JS externe. Pas de `eval`, pas de `innerHTML` avec du contenu venant du pty en dehors de l'iframe sandbox.
 - Le cœur (`pty`, `term`, `rich`) est une bibliothèque testable sans fenêtre ; `view` est le seul module qui connaît wry. `cargo test` passe en CI headless.

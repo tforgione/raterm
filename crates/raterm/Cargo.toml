@@ -8,7 +8,7 @@ license.workspace = true
 alacritty_terminal = "0.26"
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
-comrak = { version = "0.56", default-features = false }
+comrak = { version = "0.56", default-features = false, features = ["syntect-fancy"] }
 gtk = "0.18"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }

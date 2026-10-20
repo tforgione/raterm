@@ -163,7 +163,7 @@ ESC ] 7117 ; <kind> [; <key>=<value> ...] ; <base64> BEL
 
 | Kind | Payload | Shown as |
 | --- | --- | --- |
-| `md` | Markdown (CommonMark, GFM tables and autolinks) | rendered HTML |
+| `md` | Markdown (CommonMark, GFM tables and autolinks) | rendered HTML, with syntax highlighting in code blocks |
 | `html` | an HTML fragment | HTML |
 | `svg` | an SVG document | an image |
 | `img` | image bytes, with `mime=image/...` | an image |
