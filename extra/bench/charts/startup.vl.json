@@ -1,0 +1,49 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": {
+    "text": "Startup",
+    "subtitle": "launch to first frame with content, ms, lower is better"
+  },
+  "data": {
+    "url": "startup.csv",
+    "format": {
+      "type": "csv",
+      "parse": {
+        "first_frame_ms": "number"
+      }
+    }
+  },
+  "width": 520,
+  "mark": {
+    "type": "boxplot",
+    "extent": "min-max"
+  },
+  "encoding": {
+    "y": {
+      "field": "terminal",
+      "type": "nominal",
+      "sort": [
+        "raterm",
+        "alacritty"
+      ],
+      "title": null
+    },
+    "x": {
+      "field": "first_frame_ms",
+      "type": "quantitative",
+      "title": "ms",
+      "scale": {
+        "zero": true
+      }
+    },
+    "color": {
+      "field": "terminal",
+      "type": "nominal",
+      "sort": [
+        "raterm",
+        "alacritty"
+      ],
+      "legend": null
+    }
+  }
+}

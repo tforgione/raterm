@@ -1,0 +1,47 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": {
+    "text": "Memory of the terminal's processes",
+    "subtitle": "PSS in MiB, idle and 1 s after displaying 4 MiB, lower is better"
+  },
+  "data": {
+    "url": "memory.csv",
+    "format": {
+      "type": "csv",
+      "parse": {
+        "pss_mib": "number"
+      }
+    }
+  },
+  "width": 520,
+  "mark": "bar",
+  "encoding": {
+    "y": {
+      "field": "state",
+      "type": "nominal",
+      "sort": null,
+      "title": null
+    },
+    "yOffset": {
+      "field": "terminal",
+      "sort": [
+        "raterm",
+        "alacritty"
+      ]
+    },
+    "x": {
+      "field": "pss_mib",
+      "type": "quantitative",
+      "title": "MiB"
+    },
+    "color": {
+      "field": "terminal",
+      "type": "nominal",
+      "sort": [
+        "raterm",
+        "alacritty"
+      ],
+      "title": null
+    }
+  }
+}

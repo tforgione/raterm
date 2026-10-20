@@ -1,0 +1,40 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": {
+    "text": "Output latency",
+    "subtitle": "pty write to pixel on screen, ms, lower is better"
+  },
+  "data": {
+    "url": "latency.csv",
+    "format": {
+      "type": "csv",
+      "parse": {
+        "latency_ms": "number"
+      }
+    }
+  },
+  "width": 520,
+  "mark": {
+    "type": "boxplot",
+    "extent": "min-max"
+  },
+  "encoding": {
+    "y": {
+      "field": "setup",
+      "type": "nominal",
+      "sort": null,
+      "title": null
+    },
+    "x": {
+      "field": "latency_ms",
+      "type": "quantitative",
+      "title": "ms"
+    },
+    "color": {
+      "field": "setup",
+      "type": "nominal",
+      "sort": null,
+      "legend": null
+    }
+  }
+}

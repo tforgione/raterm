@@ -1,0 +1,47 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": {
+    "text": "Output throughput, until displayed",
+    "subtitle": "MiB/s, log scale, higher is better"
+  },
+  "data": {
+    "url": "throughput.csv",
+    "format": {
+      "type": "csv",
+      "parse": {
+        "displayed_mib_per_s": "number"
+      }
+    }
+  },
+  "width": 520,
+  "mark": {
+    "type": "point",
+    "filled": true,
+    "size": 120
+  },
+  "encoding": {
+    "y": {
+      "field": "workload",
+      "type": "nominal",
+      "sort": null,
+      "title": null
+    },
+    "x": {
+      "field": "displayed_mib_per_s",
+      "type": "quantitative",
+      "scale": {
+        "type": "log"
+      },
+      "title": "MiB/s"
+    },
+    "color": {
+      "field": "terminal",
+      "type": "nominal",
+      "sort": [
+        "raterm",
+        "alacritty"
+      ],
+      "title": null
+    }
+  }
+}
