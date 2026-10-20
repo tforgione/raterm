@@ -1,0 +1,92 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": {
+    "text": "Cost of a full scrollback",
+    "subtitle": "median output latency (ms) and memory (PSS, MiB), log scales"
+  },
+  "data": {
+    "url": "scrollback.csv",
+    "format": {
+      "type": "csv",
+      "parse": {
+        "lines": "number",
+        "latency_ms": "number",
+        "pss_mib": "number"
+      }
+    }
+  },
+  "hconcat": [
+    {
+      "width": 250,
+      "mark": {
+        "type": "line",
+        "point": true
+      },
+      "encoding": {
+        "x": {
+          "field": "lines",
+          "type": "quantitative",
+          "scale": {
+            "type": "log"
+          },
+          "title": "lines of scrollback"
+        },
+        "y": {
+          "field": "latency_ms",
+          "type": "quantitative",
+          "title": "latency (ms)",
+          "scale": {
+            "zero": true
+          }
+        },
+        "color": {
+          "field": "terminal",
+          "type": "nominal",
+          "sort": [
+            "raterm",
+            "gnome-terminal",
+            "terminator",
+            "alacritty"
+          ],
+          "title": null
+        }
+      }
+    },
+    {
+      "width": 250,
+      "mark": {
+        "type": "line",
+        "point": true
+      },
+      "encoding": {
+        "x": {
+          "field": "lines",
+          "type": "quantitative",
+          "scale": {
+            "type": "log"
+          },
+          "title": "lines of scrollback"
+        },
+        "y": {
+          "field": "pss_mib",
+          "type": "quantitative",
+          "title": "PSS (MiB)",
+          "scale": {
+            "zero": true
+          }
+        },
+        "color": {
+          "field": "terminal",
+          "type": "nominal",
+          "sort": [
+            "raterm",
+            "gnome-terminal",
+            "terminator",
+            "alacritty"
+          ],
+          "title": null
+        }
+      }
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Black-box benchmark of raterm against alacritty on Hyprland.
+"""Black-box benchmark of raterm against other terminals on Hyprland.
 
 Each run opens a floating test window through `hyprctl dispatch`, with this
 script running inside it (`inner` mode) and taking orders from a FIFO. What
@@ -33,6 +33,9 @@ FONT, SIZE = "UbuntuMono Nerd Font", 11
 WIDTH, HEIGHT, X, Y = 1200, 800, 60, 60
 WORKLOAD_MIB = int(os.environ.get("BENCH_MIB", 8))
 MARK, BLACK = (255, 0, 255), (0, 0, 0)
+# Scrollback sizes of the scrollback benchmark; alacritty stops at 100,000.
+TERMINALS = ["raterm", "gnome-terminal", "terminator", "alacritty"]
+SCROLLBACK_LINES = [10_000, 100_000, 1_000_000]
 LATENCY_COLORS = [(255, 128, 0), (0, 160, 255)]
 
 
@@ -210,6 +213,19 @@ def cpu_seconds(pids):
     return total / os.sysconf("SC_CLK_TCK")
 
 
+def rss_mib(pids):
+    """Resident memory, shared pages counted in full in each process."""
+    total = 0
+    for p in pids:
+        try:
+            for line in Path(f"/proc/{p}/status").read_text().splitlines():
+                if line.startswith("VmRSS:"):
+                    total += int(line.split()[1])
+        except OSError:
+            pass
+    return total / 1024
+
+
 def pss_mib(pids):
     total = 0
     for p in pids:
@@ -232,10 +248,25 @@ class Window:
         if startup:
             (self.ctl / "startup").touch()
         inner = f"{sys.executable} -I {Path(__file__).resolve()} inner {self.ctl}"
+        self.term = term
         if term == "raterm":
             cmd = f"env XDG_CONFIG_HOME={scratch}/config {RATERM} --title {self.title} -e {inner}"
-        else:
+        elif term == "alacritty":
             cmd = f"alacritty --config-file {scratch}/config/alacritty.toml --title {self.title} -e {inner}"
+        elif term == "terminator":
+            # Without D-Bus, the window is a process of its own.
+            cmd = f"terminator -u -g {scratch}/config/terminator.conf -T {self.title} -x {inner}"
+        else:
+            # A server of our own, which no other window shares, with its
+            # settings in a keyfile of the scratch directory, not in dconf.
+            app = f"fr.tforgione.RatermBench{uuid.uuid4().hex}"
+            (self.ctl / "launch.sh").write_text(
+                f"export GSETTINGS_BACKEND=keyfile XDG_CONFIG_HOME={scratch}/config\n"
+                f"/usr/lib/gnome-terminal-server --app-id {app} &\n"
+                f"gdbus wait --session --timeout 10 {app}\n"
+                f"exec gnome-terminal --app-id {app} --title {self.title} -- {inner}\n"
+            )
+            cmd = f"sh {self.ctl}/launch.sh"
         rules = f"{{ float = true, size = '{WIDTH} {HEIGHT}', move = '{X} {Y}', no_anim = true, no_initial_focus = true }}"
         self.launched = time.time_ns()
         subprocess.run(["hyprctl", "dispatch", f"hl.dsp.exec_cmd('{cmd}', {rules})"], capture_output=True, check=True)
@@ -282,17 +313,37 @@ class Window:
             pass
         time.sleep(0.2)
         # The window closes when the inner program exits; kill only if not.
-        if any(c["pid"] == self.pid for c in hypr_clients()):
-            os.kill(self.pid, 15)
+        # gnome-terminal's server outlives its windows: it is ours, kill it.
+        if self.term == "gnome-terminal" or any(c["pid"] == self.pid for c in hypr_clients()):
+            try:
+                os.kill(self.pid, 15)
+            except ProcessLookupError:
+                pass
 
 
-def setup(scratch):
+def setup(scratch, history=10_000):
+    """Same font and scrollback for both terminals."""
     config = scratch / "config"
     (config / "raterm").mkdir(parents=True, exist_ok=True)
-    (config / "raterm/config.toml").write_text(f'[font]\nfamily = "{FONT}"\nsize = {SIZE}\n')
+    (config / "raterm/config.toml").write_text(
+        f'scrollback = {history}\n[font]\nfamily = "{FONT}"\nsize = {SIZE}\n'
+    )
     (config / "alacritty.toml").write_text(
         f'[font]\nsize = {SIZE}\nnormal = {{ family = "{FONT}" }}\n'
-        "[colors.primary]\nbackground = '#000000'\n[scrolling]\nhistory = 10000\n"
+        f"[colors.primary]\nbackground = '#000000'\n[scrolling]\nhistory = {history}\n"
+    )
+    (config / "terminator.conf").write_text(
+        "[global_config]\n  dbus = False\n[profiles]\n  [[default]]\n"
+        f"    use_system_font = False\n    font = {FONT} {SIZE}\n    scrollback_lines = {history}\n"
+        '    use_theme_colors = False\n    background_color = "#000000"\n'
+        '    foreground_color = "#eaeaea"\n    show_titlebar = False\n'
+    )
+    (config / "glib-2.0/settings").mkdir(parents=True, exist_ok=True)
+    (config / "glib-2.0/settings/keyfile").write_text(
+        "[org/gnome/terminal/legacy]\ndefault-show-menubar=false\n"
+        "[org/gnome/terminal/legacy/profiles:/:b1dcc9dd-5262-4d8d-a863-c897e6d979b9]\n"
+        f"use-system-font=false\nfont='{FONT} {SIZE}'\nscrollback-lines={history}\n"
+        "use-theme-colors=false\nbackground-color='#000000'\nforeground-color='#eaeaea'\n"
     )
 
 
@@ -309,6 +360,7 @@ def bench_startup(term, scratch, record):
             mapped_ms=(w.mapped - w.launched) / 1e6,
             first_frame_ms=(seen - w.launched) / 1e6,
             idle_pss_mib=pss_mib(w.procs()),
+            idle_rss_mib=rss_mib(w.procs()),
             processes=len(w.procs()),
         )
     finally:
@@ -349,15 +401,56 @@ def bench_latency(term, scratch, record, samples=60):
     try:
         wait_pixel(*w.center, BLACK, 20)
         time.sleep(0.5)
-        for i in range(samples):
-            # Random phase against the compositor's frames.
-            time.sleep(random.uniform(0.05, 0.1))
-            t0 = time.time_ns()
-            w.send(f"cell {i % 2}")
-            seen = wait_pixel(*w.center, LATENCY_COLORS[i % 2], 5)
-            record(sample=i, latency_ms=(seen - t0) / 1e6)
+        for i, latency in enumerate(latencies(w, samples)):
+            record(sample=i, latency_ms=latency)
     finally:
         w.close()
+
+
+def latencies(w, samples):
+    out = []
+    for i in range(samples):
+        # Random phase against the compositor's frames.
+        time.sleep(random.uniform(0.05, 0.1))
+        t0 = time.time_ns()
+        w.send(f"cell {i % 2}")
+        out.append((wait_pixel(*w.center, LATENCY_COLORS[i % 2], 10) - t0) / 1e6)
+    return out
+
+
+def bench_scrollback(term, record, out, extra):
+    """Fills a scrollback, then measures memory, latency and 4 MiB more."""
+    for lines in SCROLLBACK_LINES:
+        if term == "alacritty" and lines > 100_000:
+            continue
+        fill = out / f"fill-{lines}.txt"
+        if not fill.exists():
+            rnd = random.Random(lines)
+            words = ["".join(rnd.choices("abcdefghijklmnopqrstuvwxyz", k=rnd.randint(1, 10))) for _ in range(2000)]
+            fill.write_text("".join(" ".join(rnd.choices(words, k=rnd.randint(4, 16))) + "\n" for _ in range(lines)))
+        scratch = Path(tempfile.mkdtemp(prefix="raterm-bench-"))
+        setup(scratch, history=lines)
+        w = Window(term, scratch).ready()
+        try:
+            wait_pixel(*w.center, BLACK, 20)
+            time.sleep(0.5)
+            t0 = time.time_ns()
+            w.send(f"cat {fill}")
+            fill_s = (wait_pixel(*w.center, MARK, 900, interval=0.05) - t0) / 1e9
+            # Most of the garbage of the output is collected by then.
+            time.sleep(15)
+            pss = pss_mib(w.procs())
+            w.send("black")
+            wait_pixel(*w.center, BLACK, 120)
+            time.sleep(0.5)
+            t0 = time.time_ns()
+            w.send(f"cat {extra}")
+            extra_s = (wait_pixel(*w.center, MARK, 900, interval=0.05) - t0) / 1e9
+            time.sleep(5)
+            ls = latencies(w, 30)
+            record(lines=lines, fill_s=fill_s, pss_mib=pss, extra_s=extra_s, latency_ms=statistics.median(ls))
+        finally:
+            w.close()
 
 
 def run(args):
@@ -365,7 +458,7 @@ def run(args):
     out.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="raterm-bench-"))
     setup(scratch)
-    files = workloads(out / f"workloads-{WORKLOAD_MIB}") if "throughput" in args.only else {}
+    files = workloads(out / f"workloads-{WORKLOAD_MIB}") if {"throughput", "scrollback"} & set(args.only) else {}
     hz = refresh_rate()
     results = out / "results.jsonl"
     with open(results, "a") as log:
@@ -387,6 +480,8 @@ def run(args):
                             bench_throughput(term, scratch, record, files)
                         elif bench == "latency":
                             bench_latency(term, scratch, record)
+                        elif bench == "scrollback":
+                            bench_scrollback(term, record, out, files["ascii"])
                     except TimeoutError as e:
                         print(f"{bench} {term} run {n}: {e}", file=sys.stderr, flush=True)
     print(f"results in {results}")
@@ -432,8 +527,9 @@ def report(args):
             memory.append([t, f"after {wl}", round(med(rs, "after_pss_mib"))])
             detail.append([wl, t, f"{med(rs, 'drain_s'):.3f}", f"{d:.3f}", f"{med(rs, 'cpu_s'):.2f}", f"{med(rs, 'after_pss_mib'):.0f}"])
         ds = [med(rs, "display_s") for rs in by.values()]
-        ratio = [f"×{ds[0] / ds[1]:.0f}"] if len(ds) == 2 else []
-        display.append([wl, f"{mib:.1f}", *(f"{d:.3f} s ({mib / d:.3g} MiB/s)" for d in ds), *ratio])
+        # How many times the first terminal is slower than each other one.
+        ratios = [f"×{ds[0] / d:.1f}" for d in ds[1:]]
+        display.append([wl, f"{mib:.1f}", *(f"{d:.3f} s ({mib / d:.3g} MiB/s)" for d in ds), *ratios])
     write_csv("throughput", ["terminal", "workload", "displayed_mib_per_s", "drained_mib_per_s"], csv)
 
     lat = pick("latency")
@@ -449,7 +545,7 @@ def report(args):
 
     runs = max(r["run"] for r in rows) + 1
     print(f"Medians over {runs} runs.\n\n### Throughput\n")
-    table(["workload", "MiB", *terms, "ratio"][: 3 + len(terms) - (len(terms) != 2)], display)
+    table(["workload", "MiB", *terms, *(f"{terms[0]} / {t}" for t in terms[1:])], display)
     table(["workload", "terminal", "drained (s)", "displayed (s)", "CPU (s)", "PSS after (MiB)"], detail)
     print("### Latency\n")
     lines = []
@@ -461,8 +557,22 @@ def report(args):
     lines = []
     for t in terms:
         if ss := pick("startup", terminal=t):
-            lines.append([t, f"{med(ss, 'mapped_ms'):.0f}", f"{med(ss, 'first_frame_ms'):.0f}", f"{med(ss, 'idle_pss_mib'):.0f}", ss[0]["processes"]])
-    table(["terminal", "window mapped (ms)", "first frame (ms)", "idle PSS (MiB)", "processes"], lines)
+            lines.append([t, f"{med(ss, 'mapped_ms'):.0f}", f"{med(ss, 'first_frame_ms'):.0f}", f"{med(ss, 'idle_pss_mib'):.0f}", f"{med(ss, 'idle_rss_mib'):.0f}", ss[0]["processes"]])
+    table(["terminal", "window mapped (ms)", "first frame (ms)", "idle PSS (MiB)", "idle RSS (MiB)", "processes"], lines)
+
+    csv, lines = [], []
+    for t in terms:
+        for n in SCROLLBACK_LINES:
+            if rs := pick("scrollback", terminal=t, lines=n):
+                csv.append([t, n, round(med(rs, "latency_ms"), 1), round(med(rs, "pss_mib"))])
+                lines.append(
+                    [t, f"{n:,}", f"{med(rs, 'fill_s'):.1f}", f"{med(rs, 'pss_mib'):.0f}",
+                     f"{med(rs, 'latency_ms'):.1f}", f"{med(rs, 'extra_s'):.2f}", len(rs)]
+                )
+    if lines:
+        write_csv("scrollback", ["terminal", "lines", "latency_ms", "pss_mib"], csv)
+        print("### Scrollback\n")
+        table(["terminal", "lines", "filled in (s)", "PSS (MiB)", "latency (ms)", "4 MiB more (s)", "runs"], lines)
 
 
 def main():
@@ -471,8 +581,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("run")
-    r.add_argument("--only", type=lambda s: s.split(","), default=["startup", "latency", "throughput"])
-    r.add_argument("--terminals", type=lambda s: s.split(","), default=["raterm", "alacritty"])
+    r.add_argument("--only", type=lambda s: s.split(","), default=["startup", "latency", "throughput", "scrollback"])
+    r.add_argument("--terminals", type=lambda s: s.split(","), default=TERMINALS)
     r.add_argument("--runs", type=int, default=3)
     r.add_argument("--out", default="bench-results")
     sub.add_parser("report").add_argument("dir")

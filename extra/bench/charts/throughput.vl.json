@@ -39,6 +39,8 @@
       "type": "nominal",
       "sort": [
         "raterm",
+        "gnome-terminal",
+        "terminator",
         "alacritty"
       ],
       "title": null

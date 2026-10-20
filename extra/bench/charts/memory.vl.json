@@ -26,6 +26,8 @@
       "field": "terminal",
       "sort": [
         "raterm",
+        "gnome-terminal",
+        "terminator",
         "alacritty"
       ]
     },
@@ -39,6 +41,8 @@
       "type": "nominal",
       "sort": [
         "raterm",
+        "gnome-terminal",
+        "terminator",
         "alacritty"
       ],
       "title": null
