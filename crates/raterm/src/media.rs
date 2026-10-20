@@ -1,7 +1,7 @@
 //! Local files shown by video blocks, streamed to the view over HTTP.
 //!
 //! WebKit's media player only reads http(s), data: and blob: URLs, neither
-//! rt:// nor file://. Files are served on 127.0.0.1, under a random token,
+//! raterm:// nor file://. Files are served on 127.0.0.1, under a random token,
 //! and only those announced by a video block, by index: no other process can
 //! use the server, and no block can make it read an arbitrary path.
 
@@ -149,7 +149,7 @@ mod tests {
 
     #[test]
     fn serves_registered_files_by_range() {
-        let path = std::env::temp_dir().join(format!("rt-media-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("raterm-media-{}", std::process::id()));
         std::fs::write(&path, "0123456789").unwrap();
         let media = Media::default();
         let server = serve(media.clone()).unwrap();

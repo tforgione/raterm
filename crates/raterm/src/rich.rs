@@ -119,7 +119,7 @@ impl Filter {
                 _ => {
                     self.buf.push(b);
                     if self.buf.len() > MAX_PAYLOAD {
-                        eprintln!("rt: rich block over {MAX_PAYLOAD} bytes, ignored");
+                        eprintln!("raterm: rich block over {MAX_PAYLOAD} bytes, ignored");
                         self.overflow = true;
                         self.buf = Vec::new();
                     }
@@ -128,7 +128,7 @@ impl Filter {
             State::PayloadEsc if b == b'\\' => self.finish(text, out),
             State::PayloadEsc => {
                 // Any other escape aborts the string and starts a new sequence.
-                eprintln!("rt: unterminated rich block, ignored");
+                eprintln!("raterm: unterminated rich block, ignored");
                 self.reset();
                 self.state = State::Prefix;
                 self.buf.push(ESC);
@@ -146,7 +146,7 @@ impl Filter {
                     }
                     out.push(Piece::Block(block));
                 }
-                Err(e) => eprintln!("rt: invalid rich block: {e}"),
+                Err(e) => eprintln!("raterm: invalid rich block: {e}"),
             }
         }
         self.reset();

@@ -2,11 +2,11 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::thread;
 
-use rt::config::{self, Config};
-use rt::media;
-use rt::pty::Error;
-use rt::session::Session;
-use rt::term::Event as TermEvent;
+use raterm::config::{self, Config};
+use raterm::media;
+use raterm::pty::Error;
+use raterm::session::Session;
+use raterm::term::Event as TermEvent;
 use serde::Deserialize;
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -52,13 +52,13 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let media = media::serve(session.media())?;
     // Served as a script so that the page has it before app.js runs.
     let config_js = format!(
-        "const rtConfig = {};\nconst rtMedia = {};",
+        "const ratermConfig = {};\nconst ratermMedia = {};",
         serde_json::to_string(&config)?,
         serde_json::to_string(&media.base)?,
     );
     // Rich blocks inherit this policy: they can show inline styles and data:
     // images, but never load anything from the network; videos of local files
-    // come from rt's own server.
+    // come from raterm's own server.
     let csp = format!(
         "default-src 'self'; img-src 'self' data:; media-src data: {}; \
          style-src 'self' 'unsafe-inline'; frame-src 'self' http: https: mailto:",
@@ -76,10 +76,10 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let pump_proxy = proxy.clone();
     let title_proxy = proxy.clone();
     let webview = WebViewBuilder::new()
-        .with_custom_protocol("rt".into(), move |_, req| {
+        .with_custom_protocol("raterm".into(), move |_, req| {
             serve(req.uri().path(), &config_js, &csp)
         })
-        .with_url("rt://app/")
+        .with_url("raterm://app/")
         .with_clipboard(true)
         .with_navigation_handler(|url| navigate(&url))
         .with_document_title_changed_handler(move |title| {
@@ -114,7 +114,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 });
             }
             Ok(Message::NewWindow) => new_window(session.cwd()),
-            Err(e) => eprintln!("rt: bad ipc message: {e}"),
+            Err(e) => eprintln!("raterm: bad ipc message: {e}"),
         })
         .build_gtk(window.default_vbox().ok_or("no GTK container")?)?;
 
@@ -122,7 +122,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(UserEvent::Events(json)) => {
-                let _ = webview.evaluate_script(&format!("rt.events({json})"));
+                let _ = webview.evaluate_script(&format!("raterm.events({json})"));
             }
             Event::UserEvent(UserEvent::Title(set)) => {
                 window.set_title(if set.is_empty() { &title } else { &set })
@@ -147,7 +147,7 @@ fn send(proxy: &EventLoopProxy<UserEvent>, events: &[TermEvent]) {
 /// click there (the block runs no script), so it is caught here instead.
 /// Blocks cannot navigate on their own: the sandbox blocks <meta refresh>.
 fn navigate(url: &str) -> bool {
-    if url.starts_with("rt://app/") || url.starts_with("about:") {
+    if url.starts_with("raterm://app/") || url.starts_with("about:") {
         return true;
     }
     open_url(url);
@@ -162,26 +162,26 @@ fn open_url(url: &str) {
         .iter()
         .any(|s| url.starts_with(s))
     {
-        return eprintln!("rt: refusing to open {url:?}");
+        return eprintln!("raterm: refusing to open {url:?}");
     }
     match std::process::Command::new("xdg-open").arg(url).spawn() {
         Ok(mut child) => drop(thread::spawn(move || child.wait())),
-        Err(e) => eprintln!("rt: xdg-open failed: {e}"),
+        Err(e) => eprintln!("raterm: xdg-open failed: {e}"),
     }
 }
 
-/// Opens another rt window, in the same directory as this one's shell.
+/// Opens another raterm window, in the same directory as this one's shell.
 fn new_window(cwd: Option<std::path::PathBuf>) {
     let mut command = match std::env::current_exe() {
         Ok(exe) => std::process::Command::new(exe),
-        Err(e) => return eprintln!("rt: cannot find own executable: {e}"),
+        Err(e) => return eprintln!("raterm: cannot find own executable: {e}"),
     };
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     match command.spawn() {
         Ok(mut child) => drop(thread::spawn(move || child.wait())),
-        Err(e) => eprintln!("rt: cannot open a new window: {e}"),
+        Err(e) => eprintln!("raterm: cannot open a new window: {e}"),
     }
 }
 

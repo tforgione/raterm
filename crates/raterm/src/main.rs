@@ -1,14 +1,14 @@
 mod view;
 
 use clap::Parser;
-use rt::config::Config;
+use raterm::config::Config;
 
 /// Terminal with rich output: Markdown, HTML, SVG and images.
 #[derive(Parser)]
 #[command(version)]
 struct Args {
     /// Window title.
-    #[arg(short = 'T', long, default_value = "rt")]
+    #[arg(short = 'T', long, default_value = "raterm")]
     title: String,
     /// Command and arguments to run instead of the shell; takes all the
     /// remaining arguments, like in alacritty or xterm.
@@ -23,7 +23,7 @@ struct Args {
     command: Vec<String>,
 }
 
-fn main() -> Result<(), rt::pty::Error> {
+fn main() -> Result<(), raterm::pty::Error> {
     let args = Args::parse();
     // WebKitGTK's DMA-BUF renderer dies with "Error 71 (Protocol error)" on
     // Wayland with Nvidia drivers; fall back to the shared-memory renderer.

@@ -21,8 +21,8 @@ impl Pty {
         let pair = native_pty_system().openpty(size(cols, rows))?;
         let mut cmd = CommandBuilder::from_argv(command.iter().map(Into::into).collect());
         cmd.env("TERM", "xterm-256color");
-        cmd.env("TERM_PROGRAM", "rt");
-        cmd.env("RT_TERM", "1");
+        cmd.env("TERM_PROGRAM", "raterm");
+        cmd.env("RATERM", "1");
         let child = pair.slave.spawn_command(cmd)?;
         // Dropping the slave lets reads on the master fail once the child exits.
         drop(pair.slave);

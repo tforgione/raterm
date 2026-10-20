@@ -1,11 +1,11 @@
 //! Replays recorded pty sessions (`tests/data/*.in`, see `record.sh`) and
 //! compares the final screen and emitted events with `*.out`.
-//! Run with `RT_UPDATE_SNAPSHOTS=1` to rewrite the snapshots.
+//! Run with `RATERM_UPDATE_SNAPSHOTS=1` to rewrite the snapshots.
 
 use std::fs;
 use std::path::Path;
 
-use rt::term::Terminal;
+use raterm::term::Terminal;
 
 fn replay(input: &[u8]) -> String {
     let mut term = Terminal::new(80, 24);
@@ -23,7 +23,7 @@ fn replay(input: &[u8]) -> String {
 #[test]
 fn snapshots() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
-    let update = std::env::var_os("RT_UPDATE_SNAPSHOTS").is_some();
+    let update = std::env::var_os("RATERM_UPDATE_SNAPSHOTS").is_some();
     let mut failed = Vec::new();
     for entry in fs::read_dir(&dir).unwrap() {
         let path = entry.unwrap().path();

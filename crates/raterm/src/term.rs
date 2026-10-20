@@ -185,7 +185,7 @@ impl Terminal {
             .is_some_and(|id| !self.ids.insert(id.clone()));
         let block = match block.render(&self.media) {
             Ok(block) => block,
-            Err(e) => return eprintln!("rt: invalid rich block: {e}"),
+            Err(e) => return eprintln!("raterm: invalid rich block: {e}"),
         };
         if !replace {
             if self.term.grid().cursor.point.column.0 > 0 {

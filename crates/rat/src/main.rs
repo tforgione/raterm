@@ -1,4 +1,4 @@
-//! Shows a file as a rich block in rt, or as plain text anywhere else.
+//! Shows a file as a rich block in raterm, or as plain text anywhere else.
 
 use std::fs::File;
 use std::io::{self, Read, Write};
@@ -9,11 +9,11 @@ use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use clap::{ArgGroup, Parser};
 
-/// Must match rt's limit, which drops larger blocks.
+/// Must match raterm's limit, which drops larger blocks.
 const MAX_PAYLOAD: usize = 8 << 20;
 
 #[derive(Parser)]
-#[command(about = "Show a file as a rich block in the rt terminal")]
+#[command(about = "Show a file as a rich block in the raterm terminal")]
 #[command(group(ArgGroup::new("kind").args(["md", "html", "svg", "img", "video"])))]
 struct Args {
     /// File to show, or `-` for stdin.
@@ -43,7 +43,7 @@ struct Args {
     /// Replace the previous block with the same id.
     #[arg(long, value_name = "NAME")]
     id: Option<String>,
-    /// Emit the block even when not running in rt.
+    /// Emit the block even when not running in raterm.
     #[arg(long)]
     force: bool,
 }
@@ -91,14 +91,14 @@ fn run(args: Args) -> Result<(), String> {
         }
     };
 
-    let in_rt = std::env::var_os("RT_TERM").is_some();
-    let emit = in_rt || args.force;
-    // Over ssh, rt cannot read a remote file by path, and sending the video
+    let in_raterm = std::env::var_os("RATERM").is_some();
+    let emit = in_raterm || args.force;
+    // Over ssh, raterm cannot read a remote file by path, and sending the video
     // whole would push megabytes through the connection.
     if emit && kind == "video" && std::env::var_os("SSH_CONNECTION").is_some() {
         return Err("videos cannot be shown over ssh".into());
     }
-    // A local video is sent by path: rt reads it itself, so it can be large.
+    // A local video is sent by path: raterm reads it itself, so it can be large.
     let by_path = kind == "video" && !stdin;
     let error = |e: io::Error| format!("{}: {e}", args.file.display());
     let data = if stdin {

@@ -7,9 +7,9 @@ const input = document.getElementById("input");
 const searchBox = document.getElementById("search");
 const send = (msg) => window.ipc.postMessage(JSON.stringify(msg));
 
-// Configuration (rtConfig comes from config.js, generated from config.toml)
+// Configuration (ratermConfig comes from config.js, generated from config.toml)
 
-const config = rtConfig;
+const config = ratermConfig;
 const root = document.documentElement;
 root.style.setProperty("--font-family", `${config.font.family}, monospace`);
 document.body.classList.add(`cursor-${config.cursor.style}`);
@@ -46,7 +46,7 @@ let altOn = false;
 // Last scrollback line when it soft-wraps, so its continuation joins it.
 let wrapped = null;
 
-window.rt = {
+window.raterm = {
   events(list) {
     if (!queue.length) requestAnimationFrame(flush);
     queue.push(...list);
@@ -115,8 +115,8 @@ function richBlock(ev) {
     video.controls = true;
     video.preload = "metadata";
     video.addEventListener("loadedmetadata", follow);
-    // Local files are streamed by rt's media server, the rest are data: URLs.
-    video.src = ev.content.startsWith("media/") ? rtMedia + ev.content.slice("media/".length) : ev.content;
+    // Local files are streamed by raterm's media server, the rest are data: URLs.
+    video.src = ev.content.startsWith("media/") ? ratermMedia + ev.content.slice("media/".length) : ev.content;
     const limit = config.images.max_height;
     if (limit) lines = Math.min(lines ?? limit, limit);
     if (lines) video.style.maxHeight = `${lines}lh`;

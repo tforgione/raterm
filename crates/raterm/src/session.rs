@@ -34,7 +34,7 @@ impl Session {
 
     pub fn input(&self, data: &[u8]) {
         if let Err(e) = self.pty.lock().unwrap().write(data) {
-            eprintln!("rt: pty write failed: {e}");
+            eprintln!("raterm: pty write failed: {e}");
         }
     }
 
@@ -55,7 +55,7 @@ impl Session {
         let mut term = self.term.lock().unwrap();
         let update = term.resize(cols, rows);
         if let Err(e) = self.pty.lock().unwrap().resize(cols, rows) {
-            eprintln!("rt: pty resize failed: {e}");
+            eprintln!("raterm: pty resize failed: {e}");
         }
         self.dispatch(update, emit);
     }

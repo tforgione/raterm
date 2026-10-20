@@ -1,12 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=rt
+Name=raterm
 GenericName=Terminal
 Comment=Terminal with rich output: Markdown, HTML, SVG and images
-TryExec=rt
-Exec=rt
+TryExec=raterm
+Exec=raterm
 Icon=utilities-terminal
 Terminal=false
 Categories=System;TerminalEmulator;
 Keywords=shell;prompt;command;commandline;terminal;markdown;
-StartupWMClass=rt
+StartupWMClass=raterm

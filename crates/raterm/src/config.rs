@@ -1,4 +1,4 @@
-//! User configuration, read from `$XDG_CONFIG_HOME/rt/config.toml`.
+//! User configuration, read from `$XDG_CONFIG_HOME/raterm/config.toml`.
 //!
 //! Colors are not configured here: they are CSS variables, overridden in
 //! `user.css` next to this file.
@@ -121,7 +121,7 @@ impl Config {
         let path = dir().join("config.toml");
         match std::fs::read_to_string(&path) {
             Ok(text) => Config::parse(&text).unwrap_or_else(|e| {
-                eprintln!("rt: {}: {e}", path.display());
+                eprintln!("raterm: {}: {e}", path.display());
                 Config::default()
             }),
             Err(_) => Config::default(),
@@ -140,14 +140,14 @@ impl Config {
     }
 }
 
-/// `$XDG_CONFIG_HOME/rt`, or `~/.config/rt`.
+/// `$XDG_CONFIG_HOME/raterm`, or `~/.config/raterm`.
 pub fn dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
         .unwrap_or_default()
-        .join("rt")
+        .join("raterm")
 }
 
 #[cfg(test)]
