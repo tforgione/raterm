@@ -4,7 +4,7 @@ Oct 20, 2026 · @Thomas
 
 ## Contexte et objectif
 
-Construire un émulateur de terminal en Rust dont la zone d'affichage est une webview : la sortie classique (texte, couleurs ANSI, curseur) est rendue comme dans n'importe quel terminal, mais un programme peut aussi y insérer du HTML, du Markdown rendu, des images et du SVG, inline, à la position du curseur. Nom de travail : `rt` (binaire du terminal `rt`, outil compagnon `rt-cat`, à renommer librement).
+Construire un émulateur de terminal en Rust dont la zone d'affichage est une webview : la sortie classique (texte, couleurs ANSI, curseur) est rendue comme dans n'importe quel terminal, mais un programme peut aussi y insérer du HTML, du Markdown rendu, des images et du SVG, inline, à la position du curseur. Nom de travail : `rt` (binaire du terminal `rt`, outil compagnon `rat`, jeu de mots sur `cat`, à renommer librement).
 
 Le besoin de départ : lire des rapports Markdown avec des tableaux larges (générés par Claude Code) sans passer par un terminal qui tronque à 120 colonnes ni par un navigateur à part. La référence existante est DomTerm (BSD, 2015), qui prouve que le modèle marche mais dont le code, l'interface et le site sont datés. On ne reprend rien de DomTerm, on refait une version minimale et propre.
 
@@ -12,7 +12,7 @@ Ce que ça doit faire :
 
 - Lancer un shell dans un pty et se comporter comme un terminal correct pour l'usage quotidien : prompt, ls, git, cargo, couleurs 256 et 24 bits, scrollback, redimensionnement, copier-coller.
 - Accepter une séquence d'échappement propriétaire qui injecte un bloc riche (HTML, Markdown, image, SVG) dans le flux de sortie.
-- Fournir l'outil CLI `rt-cat` qui émet ces séquences depuis un fichier ou stdin, avec repli en texte brut hors de `rt`.
+- Fournir l'outil CLI `rat` qui émet ces séquences depuis un fichier ou stdin, avec repli en texte brut hors de `rt`.
 - Gérer l'écran alternatif (vim, htop, less) correctement, même si le rendu y est moins soigné.
 
 Ce que ça ne doit pas faire : remplacer un terminal GPU comme Alacritty ou Ghostty sur la performance, ni implémenter les protocoles graphiques kitty ou Sixel (voir Hors périmètre).
@@ -63,7 +63,7 @@ Sémantique :
 
 Sécurité : le HTML n'est pas exécuté dans la page du terminal elle-même. Chaque bloc `html`/`md`/`svg` est rendu dans un `<iframe sandbox>` sans `allow-scripts`, avec `srcdoc` et une feuille de style injectée, redimensionné à la hauteur de son contenu via `ResizeObserver` dans la page parente. Un programme qui écrit dans le terminal ne doit jamais pouvoir exécuter du JavaScript dans le processus `rt`. Les `<a href>` sont ouverts via `xdg-open` par le cœur Rust, jamais dans la webview.
 
-Détection côté programme : `rt` exporte `RT_TERM=1` et `TERM_PROGRAM=rt` dans l'environnement du shell. `rt-cat` et tout script compatible testent cette variable et se replient sur du texte brut sinon. `TERM` reste `xterm-256color` pour que les programmes existants fonctionnent.
+Détection côté programme : `rt` exporte `RT_TERM=1` et `TERM_PROGRAM=rt` dans l'environnement du shell. `rat` et tout script compatible testent cette variable et se replient sur du texte brut sinon. `TERM` reste `xterm-256color` pour que les programmes existants fonctionnent.
 
 ## Émulation du terminal classique
 
@@ -106,28 +106,28 @@ Structure du DOM :
 
 Interaction webview → Rust via `window.ipc.postMessage(JSON)` : `{"type":"input","data":"..."}`, `{"type":"resize","cols":..,"rows":..}`, `{"type":"paste","data":"..."}`, `{"type":"open_url","url":"..."}`. Le JS ne doit jamais accéder au réseau ni au système de fichiers.
 
-## Outil CLI compagnon : rt-cat
+## Outil CLI compagnon : rat
 
 Second binaire du même workspace Cargo, sans dépendance à wry. Il lit un fichier ou stdin, choisit le `kind` d'après l'extension ou un flag, encode et écrit la séquence OSC 7117 sur stdout. Hors de `rt` (pas de `RT_TERM`), il se replie sur un affichage texte raisonnable au lieu de polluer le terminal.
 
 | commande | kind émis | repli hors rt |
 | --- | --- | --- |
-| `rt-cat fichier.md` ou `rt-cat --md -` | `md` | le Markdown brut |
-| `rt-cat page.html` ou `--html` | `html` | le HTML brut |
-| `rt-cat image.png` (png, jpg, gif, webp) | `img` | le chemin du fichier |
-| `rt-cat dessin.svg` | `svg` | le chemin du fichier |
+| `rat fichier.md` ou `rat --md -` | `md` | le Markdown brut |
+| `rat page.html` ou `--html` | `html` | le HTML brut |
+| `rat image.png` (png, jpg, gif, webp) | `img` | le chemin du fichier |
+| `rat dessin.svg` | `svg` | le chemin du fichier |
 
 Options : `--width N`, `--height N`, `--id NOM` (mappées sur les clés du protocole), `--force` pour émettre la séquence même sans `RT_TERM`.
 
 Utilisation visée :
 
 ```
-rt-cat rapport.md
-cargo bench | rt-plot | rt-cat --svg -      # un futur outil émet du SVG
-curl -s https://… | rt-cat --html -
+rat rapport.md
+cargo bench | rt-plot | rat --svg -      # un futur outil émet du SVG
+curl -s https://… | rat --html -
 ```
 
-La conversion Markdown se fait côté `rt` et non dans `rt-cat` : ça garde `rt-cat` minuscule et permet à n'importe quel script shell d'émettre `md` avec un `printf` et `base64`, sans dépendre du binaire. Documenter cette recette dans le README (dix lignes de bash).
+La conversion Markdown se fait côté `rt` et non dans `rat` : ça garde `rat` minuscule et permet à n'importe quel script shell d'émettre `md` avec un `printf` et `base64`, sans dépendre du binaire. Documenter cette recette dans le README (dix lignes de bash).
 
 ## Jalons
 
@@ -135,16 +135,16 @@ Chaque jalon est livrable et testable seul. Claude Code travaille un jalon à la
 
 1. **M0 : la plomberie.** Workspace Cargo avec les deux crates, fenêtre `tao` + webview `wry` qui affiche une page embarquée, pty qui lance `$SHELL`, les octets bruts affichés dans un `<pre>` sans aucune interprétation, les frappes renvoyées au pty. Critère : taper `ls` et voir le résultat, même moche.
 2. **M1 : un vrai terminal.** Intégration d'`alacritty_terminal`, diff de grille, scrollback DOM, écran alternatif, resize, couleurs, sélection et copier-coller. Tests snapshot en place. Critère : une journée de travail dans `rt` sans ouvrir un autre terminal : cargo, git, vim, htop, less, `ssh` vers une machine distante.
-3. **M2 : la sortie riche.** Filtre OSC 7117, les quatre kinds, l'iframe sandbox, `rt-cat`, le remplacement par `id`. Critère : `rt-cat rapport.md` affiche un tableau large lisible avec lignes alternées, `rt-cat image.png` affiche l'image, un `<script>` dans un bloc `html` ne s'exécute pas.
+3. **M2 : la sortie riche.** Filtre OSC 7117, les quatre kinds, l'iframe sandbox, `rat`, le remplacement par `id`. Critère : `rat rapport.md` affiche un tableau large lisible avec lignes alternées, `rat image.png` affiche l'image, un `<script>` dans un bloc `html` ne s'exécute pas.
 4. **M3 : confort.** Config TOML, `user.css`, zoom, recherche, liens cliquables (OSC 8 et URL détectées), titre de fenêtre, plafond de scrollback, raccourcis configurables. Critère : remplacer le terminal par défaut sur le poste.
-5. **M4 : packaging.** Binaire statique ou `.deb`/AUR, fichier `.desktop`, README avec la recette bash pour émettre un bloc sans `rt-cat`, export de session en HTML autonome.
+5. **M4 : packaging.** Binaire statique ou `.deb`/AUR, fichier `.desktop`, README avec la recette bash pour émettre un bloc sans `rat`, export de session en HTML autonome.
 
 M2 est le cœur de la valeur ; si M1 prend trop de temps, on accepte un M1 dégradé (pas de souris, pas de sélection dans l'écran alternatif) pour atteindre M2 plus vite.
 
 ## Contraintes techniques et conventions
 
 - Rust stable, édition 2024, `cargo clippy -- -D warnings` et `cargo fmt --check` propres à chaque commit.
-- Crates imposées : `wry` + `tao` (fenêtre et webview, déjà utilisées dans le projet webapp), `portable-pty`, `alacritty_terminal`, `comrak` (Markdown, avec l'extension `table`), `base64`, `serde`/`serde_json`, `clap` pour `rt-cat`, `toml` pour la config, `gtk` pour la sélection primaire (déjà tirée par `tao`, même version). Pas d'autre dépendance sans justification dans le commit.
+- Crates imposées : `wry` + `tao` (fenêtre et webview, déjà utilisées dans le projet webapp), `portable-pty`, `alacritty_terminal`, `comrak` (Markdown, avec l'extension `table`), `base64`, `serde`/`serde_json`, `clap` pour `rat`, `toml` pour la config, `gtk` pour la sélection primaire (déjà tirée par `tao`, même version). Pas d'autre dépendance sans justification dans le commit.
 - Cible : Linux uniquement, X11 et Wayland via WebKitGTK (ce que wry utilise sur Linux). Pas de code spécifique à macOS ou Windows, pas de `cfg` morts.
 - Frontend : HTML/CSS/JS vanilla, un seul fichier par type, pas de Node, pas de bundler, pas de dépendance JS externe. Pas de `eval`, pas de `innerHTML` avec du contenu venant du pty en dehors de l'iframe sandbox.
 - Le cœur (`pty`, `term`, `rich`) est une bibliothèque testable sans fenêtre ; `view` est le seul module qui connaît wry. `cargo test` passe en CI headless.

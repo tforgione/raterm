@@ -1,5 +1,5 @@
 [package]
-name = "rt-cat"
+name = "rat"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

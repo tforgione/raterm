@@ -47,7 +47,7 @@ fn main() -> ExitCode {
     match run(Args::parse()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("rt-cat: {e}");
+            eprintln!("rat: {e}");
             ExitCode::FAILURE
         }
     }

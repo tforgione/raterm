@@ -1995,6 +1995,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rat"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "clap",
+]
+
+[[package]]
 name = "raw-window-handle"
 version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2050,14 +2058,6 @@ dependencies = [
  "tao",
  "toml 1.1.8+spec-1.1.0",
  "wry",
-]
-
-[[package]]
-name = "rt-cat"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "clap",
 ]
 
 [[package]]
