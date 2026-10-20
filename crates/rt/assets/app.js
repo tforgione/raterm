@@ -219,7 +219,7 @@ function newLine() {
 function spans(runs) {
   return runs.map((run) => {
     const span = document.createElement("span");
-    span.textContent = run.text;
+    span.append(...cellText(run.text, run.class?.includes("wide") ? 2 : 1));
     if (run.class) span.className = run.class;
     if (run.fg) span.style.color = run.fg;
     if (run.bg) span.style.backgroundColor = run.bg;
@@ -229,6 +229,50 @@ function spans(runs) {
     }
     return span;
   });
+}
+
+// Glyphs missing from the configured font come from fallback fonts, whose
+// widths differ: in plain text, they would shift the rest of the line off the
+// grid. Such glyphs are boxed to their cells, like a terminal draws them.
+
+let cellWidth = 0;
+const glyphFits = new Map();
+const graphemes = new Intl.Segmenter();
+const ruler = document.createElement("span");
+ruler.style.cssText = "position: absolute; visibility: hidden; white-space: pre";
+document.body.append(ruler);
+
+function fits(glyph, cells) {
+  if (glyph < "\u0080") return true;
+  const key = glyph + cells;
+  let ok = glyphFits.get(key);
+  if (ok === undefined) {
+    ruler.textContent = glyph;
+    ok = Math.abs(ruler.getBoundingClientRect().width - cells * cellWidth) < 0.5;
+    glyphFits.set(key, ok);
+  }
+  return ok;
+}
+
+/// The text of a run, with glyphs that do not fit their cells boxed.
+function cellText(text, cells) {
+  const nodes = [];
+  let plain = "";
+  for (const { segment } of graphemes.segment(text)) {
+    if (fits(segment, cells)) {
+      plain += segment;
+      continue;
+    }
+    if (plain) nodes.push(plain);
+    plain = "";
+    const box = document.createElement("span");
+    box.className = "glyph";
+    box.style.width = `${cells}ch`;
+    box.textContent = segment;
+    nodes.push(box);
+  }
+  if (plain) nodes.push(plain);
+  return nodes;
 }
 
 // Whether the view follows new output. Only the user's scrolling changes it:
@@ -258,6 +302,10 @@ function resize() {
   document.body.append(probe);
   const cell = probe.getBoundingClientRect();
   probe.remove();
+  if (cell.width / 100 !== cellWidth) {
+    cellWidth = cell.width / 100;
+    glyphFits.clear();
+  }
   const box = (altOn ? alt : flow).getBoundingClientRect();
   const cols = Math.max(1, Math.floor((box.width - 8) / (cell.width / 100)));
   const rows = Math.max(1, Math.floor((box.height - 4) / cell.height));

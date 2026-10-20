@@ -335,6 +335,8 @@ impl Terminal {
             (flags.contains(Flags::STRIKEOUT), "s"),
             (flags.contains(Flags::DIM), "d"),
             (flags.contains(Flags::HIDDEN), "h"),
+            // Each character takes two cells (CJK, some emoji).
+            (flags.contains(Flags::WIDE_CHAR), "wide"),
             // Drawn by the view, according to the configured cursor style.
             (cursor, "cursor"),
         ]

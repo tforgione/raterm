@@ -84,6 +84,9 @@ html, body {
 .d { opacity: 0.6; }
 .h { visibility: hidden; }
 
+/* A glyph from a fallback font, kept to its cells (see cellText). */
+.glyph { display: inline-block; }
+
 .link:hover { text-decoration: underline; cursor: pointer; }
 
 /* Cursor: block, bar or underline (config.toml), hollow when unfocused. */
