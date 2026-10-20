@@ -2,7 +2,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Row as GridRow};
-use alacritty_terminal::index::{Column, Line as GridLine};
+use alacritty_terminal::index::Line as GridLine;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
@@ -425,38 +425,58 @@ impl Terminal {
     }
 
     fn render(&self, row: &GridRow<Cell>, cursor: Option<usize>) -> Line {
-        let cols = row.len();
-        let end = (0..cols)
-            .rev()
-            .find(|&x| Some(x) == cursor || !is_blank(&row[Column(x)]))
+        let cells = &row[..];
+        let end = cells
+            .iter()
+            .enumerate()
+            .rposition(|(x, cell)| Some(x) == cursor || !is_blank(cell))
             .map_or(0, |x| x + 1);
-        let chars: Vec<char> = (0..end).map(|x| row[Column(x)].c).collect();
-        let mut urls = vec![None; end];
-        for (start, stop) in find_urls(&chars) {
-            let url: String = chars[start..stop].iter().collect();
-            urls[start..stop].fill(Some(url));
-        }
+        let chars: Vec<char> = cells[..end].iter().map(|cell| cell.c).collect();
+        let urls = find_urls(&chars);
         let mut runs: Vec<Run> = Vec::new();
-        for (x, url) in urls.into_iter().enumerate() {
-            let cell = &row[Column(x)];
+        // Building a style allocates: only do it when the attributes change.
+        let mut last = None;
+        for (x, cell) in cells[..end].iter().enumerate() {
             if cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
             {
                 continue;
             }
-            let mut style = self.style(cell, Some(x) == cursor);
-            style.link = cell.hyperlink().map(|h| h.uri().to_owned()).or(url);
-            let mut text = String::from(cell.c);
-            text.extend(cell.zerowidth().into_iter().flatten());
-            match runs.last_mut() {
-                Some(run) if run.style == style => run.text.push_str(&text),
-                _ => runs.push(Run { text, style }),
+            let url = urls
+                .iter()
+                .position(|&(start, stop)| (start..stop).contains(&x));
+            let key = Some((
+                cell.fg,
+                cell.bg,
+                cell.flags,
+                Some(x) == cursor,
+                cell.hyperlink(),
+                url,
+            ));
+            if key != last {
+                let mut style = self.style(cell, Some(x) == cursor);
+                style.link = cell
+                    .hyperlink()
+                    .map(|h| h.uri().to_owned())
+                    .or_else(|| url.map(|i| chars[urls[i].0..urls[i].1].iter().collect()));
+                if runs.last().is_none_or(|run| run.style != style) {
+                    runs.push(Run {
+                        text: String::new(),
+                        style,
+                    });
+                }
+                last = key;
             }
+            let text = &mut runs.last_mut().unwrap().text;
+            text.push(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
         }
         Line {
             runs,
-            wrap: row[Column(cols - 1)].flags.contains(Flags::WRAPLINE),
+            wrap: cells
+                .last()
+                .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE)),
         }
     }
 
@@ -548,7 +568,10 @@ impl Line {
 }
 
 fn is_blank(cell: &Cell) -> bool {
-    cell.c == ' ' && color(cell.bg).is_none() && !cell.flags.contains(Flags::INVERSE)
+    // Most cells have the default background: skip `color` for them.
+    cell.c == ' '
+        && !cell.flags.contains(Flags::INVERSE)
+        && (cell.bg == Color::Named(NamedColor::Background) || color(cell.bg).is_none())
 }
 
 /// CSS color for a cell color, `None` for the default foreground/background.
