@@ -34,6 +34,10 @@ pub enum Event {
     Mode {
         app_cursor: bool,
     },
+    /// Window title set by the program (OSC 0/2).
+    Title {
+        title: String,
+    },
     /// A rich block, inserted in the flow before the screen, or replacing the
     /// block with the same id.
     Block {
@@ -74,6 +78,9 @@ pub struct Style {
     pub bg: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub class: String,
+    /// Target of an OSC 8 hyperlink, or of a URL written in the text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
 }
 
 struct Listener(Sender<TermEvent>);
@@ -92,6 +99,8 @@ pub struct Update {
 }
 
 pub struct Terminal {
+    /// Bold text in one of the 8 normal colors uses its bright variant.
+    pub bold_is_bright: bool,
     term: Term<Listener>,
     parser: Processor,
     term_events: Receiver<TermEvent>,
@@ -113,6 +122,7 @@ impl Terminal {
         };
         let size = TermSize::new(cols as usize, rows as usize);
         Terminal {
+            bold_is_bright: false,
             term: Term::new(config, &size, Listener(tx)),
             parser: Processor::new(),
             term_events: rx,
@@ -155,7 +165,7 @@ impl Terminal {
     pub fn text(&self) -> String {
         let grid = self.term.grid();
         (0..grid.screen_lines())
-            .map(|y| render(&grid[GridLine(y as i32)], None).text() + "\n")
+            .map(|y| self.render(&grid[GridLine(y as i32)], None).text() + "\n")
             .collect()
     }
 
@@ -195,7 +205,7 @@ impl Terminal {
     fn drain_history(&mut self, events: &mut Vec<Event>) {
         let grid = self.term.grid();
         for i in (1..=grid.history_size() as i32).rev() {
-            let line = render(&grid[GridLine(-i)], None);
+            let line = self.render(&grid[GridLine(-i)], None);
             events.push(Event::ScrollOut { line });
         }
         self.term.grid_mut().clear_history();
@@ -207,8 +217,11 @@ impl Terminal {
             reply: String::new(),
         };
         for event in self.term_events.try_iter() {
-            if let TermEvent::PtyWrite(text) = event {
-                update.reply.push_str(&text);
+            match event {
+                TermEvent::PtyWrite(text) => update.reply.push_str(&text),
+                TermEvent::Title(title) => update.events.push(Event::Title { title }),
+                TermEvent::ResetTitle => update.events.push(Event::Title { title: "rt".into() }),
+                _ => {}
             }
         }
 
@@ -236,7 +249,7 @@ impl Terminal {
         let screen: Vec<Line> = (0..height)
             .map(|y| {
                 let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
-                let line = render(&grid[GridLine(y as i32)], x);
+                let line = self.render(&grid[GridLine(y as i32)], x);
                 if self.screen.get(y) != Some(&line) {
                     rows.push(Row {
                         y,
@@ -252,6 +265,120 @@ impl Terminal {
         self.screen = screen;
         update
     }
+
+    fn render(&self, row: &GridRow<Cell>, cursor: Option<usize>) -> Line {
+        let cols = row.len();
+        let end = (0..cols)
+            .rev()
+            .find(|&x| Some(x) == cursor || !is_blank(&row[Column(x)]))
+            .map_or(0, |x| x + 1);
+        let chars: Vec<char> = (0..end).map(|x| row[Column(x)].c).collect();
+        let mut urls = vec![None; end];
+        for (start, stop) in find_urls(&chars) {
+            let url: String = chars[start..stop].iter().collect();
+            urls[start..stop].fill(Some(url));
+        }
+        let mut runs: Vec<Run> = Vec::new();
+        for (x, url) in urls.into_iter().enumerate() {
+            let cell = &row[Column(x)];
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            let mut style = self.style(cell, Some(x) == cursor);
+            style.link = cell.hyperlink().map(|h| h.uri().to_owned()).or(url);
+            let mut text = String::from(cell.c);
+            text.extend(cell.zerowidth().into_iter().flatten());
+            match runs.last_mut() {
+                Some(run) if run.style == style => run.text.push_str(&text),
+                _ => runs.push(Run { text, style }),
+            }
+        }
+        Line {
+            runs,
+            wrap: row[Column(cols - 1)].flags.contains(Flags::WRAPLINE),
+        }
+    }
+
+    fn style(&self, cell: &Cell, cursor: bool) -> Style {
+        let flags = cell.flags;
+        let fg = match cell.fg {
+            Color::Named(n)
+                if self.bold_is_bright && flags.contains(Flags::BOLD) && (n as usize) < 8 =>
+            {
+                Color::Named(n.to_bright())
+            }
+            Color::Indexed(i) if self.bold_is_bright && flags.contains(Flags::BOLD) && i < 8 => {
+                Color::Indexed(i + 8)
+            }
+            fg => fg,
+        };
+        let (mut fg, mut bg) = (color(fg), color(cell.bg));
+        if flags.contains(Flags::INVERSE) {
+            (fg, bg) = (
+                Some(bg.unwrap_or("var(--bg)".into())),
+                Some(fg.unwrap_or("var(--fg)".into())),
+            );
+        }
+        let class = [
+            (flags.contains(Flags::BOLD), "b"),
+            (flags.contains(Flags::ITALIC), "i"),
+            (flags.intersects(Flags::ALL_UNDERLINES), "u"),
+            (flags.contains(Flags::STRIKEOUT), "s"),
+            (flags.contains(Flags::DIM), "d"),
+            (flags.contains(Flags::HIDDEN), "h"),
+            // Drawn by the view, according to the configured cursor style.
+            (cursor, "cursor"),
+        ]
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, name)| *name)
+        .collect::<Vec<_>>()
+        .join(" ");
+        Style {
+            fg,
+            bg,
+            class,
+            link: None,
+        }
+    }
+}
+
+/// Cell ranges of the http(s) URLs written in a line.
+fn find_urls(chars: &[char]) -> Vec<(usize, usize)> {
+    let starts_with = |x: usize, prefix: &str| {
+        prefix
+            .chars()
+            .enumerate()
+            .all(|(i, c)| chars.get(x + i) == Some(&c))
+    };
+    let mut found = Vec::new();
+    let mut x = 0;
+    while x < chars.len() {
+        if !starts_with(x, "https://") && !starts_with(x, "http://") {
+            x += 1;
+            continue;
+        }
+        let mut end = x;
+        while end < chars.len() && !chars[end].is_whitespace() && !"<>\"'`".contains(chars[end]) {
+            end += 1;
+        }
+        // Trailing punctuation usually ends the sentence, not the URL; a
+        // closing parenthesis is kept when the URL opened it (wikipedia).
+        while end > x && ".,;:!?)]}".contains(chars[end - 1]) {
+            let opened = chars[x..end].iter().filter(|&&c| c == '(').count();
+            let closed = chars[x..end].iter().filter(|&&c| c == ')').count();
+            if chars[end - 1] == ')' && opened >= closed {
+                break;
+            }
+            end -= 1;
+        }
+        found.push((x, end));
+        x = end.max(x + 1);
+    }
+    found
 }
 
 impl Line {
@@ -260,69 +387,8 @@ impl Line {
     }
 }
 
-fn render(row: &GridRow<Cell>, cursor: Option<usize>) -> Line {
-    let cols = row.len();
-    let end = (0..cols)
-        .rev()
-        .find(|&x| Some(x) == cursor || !is_blank(&row[Column(x)]))
-        .map_or(0, |x| x + 1);
-    let mut runs: Vec<Run> = Vec::new();
-    for x in 0..end {
-        let cell = &row[Column(x)];
-        if cell
-            .flags
-            .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
-        {
-            continue;
-        }
-        let style = style(cell, Some(x) == cursor);
-        let mut text = String::from(cell.c);
-        text.extend(cell.zerowidth().into_iter().flatten());
-        match runs.last_mut() {
-            Some(run) if run.style == style => run.text.push_str(&text),
-            _ => runs.push(Run { text, style }),
-        }
-    }
-    Line {
-        runs,
-        wrap: row[Column(cols - 1)].flags.contains(Flags::WRAPLINE),
-    }
-}
-
 fn is_blank(cell: &Cell) -> bool {
     cell.c == ' ' && color(cell.bg).is_none() && !cell.flags.contains(Flags::INVERSE)
-}
-
-fn style(cell: &Cell, cursor: bool) -> Style {
-    let flags = cell.flags;
-    let (mut fg, mut bg) = (color(cell.fg), color(cell.bg));
-    if flags.contains(Flags::INVERSE) {
-        (fg, bg) = (
-            Some(bg.unwrap_or("var(--bg)".into())),
-            Some(fg.unwrap_or("var(--fg)".into())),
-        );
-    }
-    if cursor {
-        (fg, bg) = (
-            Some(bg.unwrap_or("var(--bg)".into())),
-            Some("var(--cursor)".into()),
-        );
-    }
-    let class = [
-        (flags.contains(Flags::BOLD), "b"),
-        (flags.contains(Flags::ITALIC), "i"),
-        (flags.intersects(Flags::ALL_UNDERLINES), "u"),
-        (flags.contains(Flags::STRIKEOUT), "s"),
-        (flags.contains(Flags::DIM), "d"),
-        (flags.contains(Flags::HIDDEN), "h"),
-        (cursor, "cursor"),
-    ]
-    .iter()
-    .filter(|(on, _)| *on)
-    .map(|(_, name)| *name)
-    .collect::<Vec<_>>()
-    .join(" ");
-    Style { fg, bg, class }
 }
 
 /// CSS color for a cell color, `None` for the default foreground/background.
@@ -477,5 +543,63 @@ mod tests {
         assert_eq!(term.paste("a\nb"), "a\rb");
         term.advance(b"\x1b[?2004h");
         assert_eq!(term.paste("x\x1b[201~y"), "\x1b[200~x[201~y\x1b[201~");
+    }
+
+    fn links(term: &mut Terminal, bytes: &[u8]) -> Vec<(String, Option<String>)> {
+        let update = term.advance(bytes);
+        let Some(Event::Lines { rows, .. }) = update.events.last() else {
+            panic!()
+        };
+        rows[0]
+            .line
+            .runs
+            .iter()
+            .map(|r| (r.text.clone(), r.style.link.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn urls_in_text_become_links() {
+        let mut term = Terminal::new(80, 1);
+        let runs = links(
+            &mut term,
+            b"see https://en.wikipedia.org/wiki/Rust_(language). ok",
+        );
+        let url = "https://en.wikipedia.org/wiki/Rust_(language)";
+        assert_eq!(runs[1], (url.to_owned(), Some(url.to_owned())));
+        assert_eq!(runs[2].1, None);
+    }
+
+    #[test]
+    fn osc8_hyperlinks_become_links() {
+        let mut term = Terminal::new(80, 1);
+        let runs = links(
+            &mut term,
+            b"\x1b]8;;https://a.example\x1b\\here\x1b]8;;\x1b\\ x",
+        );
+        assert_eq!(runs[0], ("here".into(), Some("https://a.example".into())));
+    }
+
+    #[test]
+    fn bold_is_bright() {
+        let mut term = Terminal::new(10, 1);
+        term.bold_is_bright = true;
+        let update = term.advance(b"\x1b[1;31mA");
+        let [Event::Lines { rows, .. }] = &update.events[..] else {
+            panic!()
+        };
+        assert_eq!(rows[0].line.runs[0].style.fg.as_deref(), Some("var(--c9)"));
+    }
+
+    #[test]
+    fn title_is_forwarded() {
+        let mut term = Terminal::new(10, 1);
+        let update = term.advance(b"\x1b]0;vim\x07");
+        assert_eq!(
+            update.events[0],
+            Event::Title {
+                title: "vim".into()
+            }
+        );
     }
 }
