@@ -78,7 +78,8 @@ sb_runs = max(r["run"] for r in rows if r["bench"] == "scrollback") + 1
 
 page = f"""# Performance
 
-raterm draws its screen with a web view: the specification accepts that it
+raterm draws its grid with Pango on GTK, and its rich blocks in web views
+(see [Spec-Native-grid](Spec-Native-grid)): the specification accepts that it
 will never match a GPU terminal. This page measures by how much, against
 Alacritty, and against two terminals that are not GPU-accelerated, GNOME
 Terminal and Terminator (both on VTE, GNOME's terminal widget), with the
@@ -90,16 +91,16 @@ script `extra/bench/bench.py`.
   GNOME Terminal, at {span(speeds("raterm"))} MiB/s against {span(speeds("gnome-terminal"))} MiB/s. The three other
   terminals are close to the precision of the measure (a few frames), so the
   ratios are lower bounds. Since the first measures, the fixes of the page,
-  M5 and those of the core made raterm {span(gains)} times faster (see
+  M5, those of the core and the native grid (M6) made raterm {span(gains)} times faster (see
   [below](#since-the-first-measures)).
 - **Latency** from a program's output to the screen, at 60 Hz: {lmed["raterm"]:.0f} ms median
   for raterm, {lmed["gnome-terminal"]:.0f} ms for GNOME Terminal, {lmed["terminator"]:.0f} ms for Terminator and {lmed["alacritty"]:.0f} ms for
   Alacritty; at most {lat["raterm"][-1]:.0f} ms for raterm, {max(lat[t][-1] for t in others):.0f} ms for the others.
 - **Startup**: {first["raterm"]:.0f} ms to the first frame, against {first["gnome-terminal"]:.0f} ms for GNOME
   Terminal, {first["terminator"]:.0f} ms for Terminator and {first["alacritty"]:.0f} ms for Alacritty.
-- **Memory** is where raterm is far behind: {idle["raterm"]:.0f} MiB idle (PSS, in three
-  processes, as WebKit runs the page in its own process), against {idle["gnome-terminal"]:.0f} MiB for
-  GNOME Terminal and {idle["terminator"]:.0f} MiB for Terminator.
+- **Memory**: {idle["raterm"]:.0f} MiB idle (PSS, in one process: WebKit only starts with
+  the first block), against {idle["gnome-terminal"]:.0f} MiB for GNOME Terminal, {idle["terminator"]:.0f} MiB for Terminator
+  and {idle["alacritty"]:.0f} MiB for Alacritty.
 - **Scrollback**: since M5, a full scrollback no longer slows raterm down, up
   to 1,000,000 lines; it costs about {per_line:.0f} bytes per line of memory, where VTE
   keeps its scrollback in files and stays flat.
@@ -108,8 +109,8 @@ script `extra/bench/bench.py`.
 
 - AMD Ryzen 9 5900X, 62 GiB of RAM, NVIDIA RTX 5060 Ti, Arch Linux, Hyprland
   0.56.2, one 2560x1440 screen at 60 Hz.
-- raterm at commit `{commit}` (release build, wry 0.57, WebKitGTK 2.54.1),
-  GNOME Terminal 3.60.0 and Terminator 2.1.6 on VTE 0.84.1, Alacritty 0.17.0.
+- raterm at commit `{commit}` (release build, GTK 3 and Pango, WebKitGTK
+  2.54.1 for the blocks), GNOME Terminal 3.60.0 and Terminator 2.1.6 on VTE 0.84.1, Alacritty 0.17.0.
 - All four with the same font (UbuntuMono Nerd Font, 11 pt), a scrollback of
   10,000 lines (except for the scrollback measures), a black background and a
   1200x800 floating window, without menu bar (GNOME Terminal) or title bar
@@ -135,16 +136,15 @@ takes one compositor frame, so **every time is precise to about one frame**
   cursor moves without scrolling (like a full-screen program).
 - **Latency**: the program paints a small block in another color when it is
   told to; the time is from the order to the frame showing the block, with a
-  random pause between samples to spread them over the frame. Typing goes
-  through more steps in raterm (key event in the page, IPC, pty) that this
-  does not measure.
+  random pause between samples to spread them over the frame. Typing is
+  not measured.
 - **Startup**: from the launch request to the first frame painted by the
   program, which fills the screen as soon as it starts. Hyprland's own time
   to open a window is included, the same for all.
 - **Memory**: PSS (shared pages split between the processes that map them) of
   the terminal and its children, without the program running in it. PSS
   depends on what else runs: GTK is shared with the other GTK applications of
-  the desktop, WebKit with the raterm windows already open. The idle RSS
+  the desktop. The idle RSS
   (shared pages counted in full) is given too. **CPU** is the time used by the
   same processes during a throughput run.
 - **Scrollback**: the program fills a scrollback of 10,000, 100,000 or
@@ -166,9 +166,8 @@ file, raterm and Alacritty on their own config files.
 {sections["Throughput"].strip()}
 
 raterm drains 4 MiB in {span(drains, "{:.2f}")} s, {span(drain_ratio)} times slower than the fastest of the
-others (terminal state, screen diff and JSON events for the page), and the
-page catches up {span(catch, "{:.2f}")} s later. The CPU time is about {cpu_ratio:.1f} times the time to
-display, as the core and the web process work at the same time.
+others (terminal state and screen diff), and the screen catches up
+{span(catch, "{:.2f}")} s later. The CPU time is about {cpu_ratio:.1f} times the time to display.
 
 ### Latency
 
@@ -184,17 +183,14 @@ display, as the core and the web process work at the same time.
 
 {sections["Startup and memory"].strip()}
 
-The memory after an output is measured one second after it is displayed, so
-part of it is garbage the web process has not collected yet.
-
 ### Scrollback
 
 {img("scrollback")}
 
 {sections["Scrollback"].strip()}
 
-raterm keeps its scrollback in memory in the core and only a window of 5,000
-lines in the page (see [Spec-Scrollback](Spec-Scrollback)): the latency and
+raterm keeps its scrollback in memory in the core and only draws the rows on
+screen (see [Spec-Scrollback](Spec-Scrollback)): the latency and
 the output speed do not depend on its size, and a line costs about {per_line:.0f} bytes.
 Alacritty keeps its whole scrollback in memory too, at about {ala_line:.1f} KiB per line;
 VTE writes it to temporary files, so the memory of GNOME Terminal and
@@ -209,7 +205,8 @@ a batch was rebuilt even though only the last one is painted, and every line
 of a large output became a DOM element. Two fixes and M5 (the scrollback kept
 by the core, a window of it in the page), then work on the core (styles built
 only when attributes change, all the pending output in one batch, the page
-taking all the pending events at once) changed the time to display 4 MiB:
+taking all the pending events at once), and last the native grid, which
+replaced the page with Pango drawing, changed the time to display 4 MiB:
 
 {chr(10).join(before)}
 
