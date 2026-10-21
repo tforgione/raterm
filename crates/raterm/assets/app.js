@@ -58,10 +58,24 @@ let queue = [];
 let modes = { app_cursor: false, mouse: 0, sgr_mouse: false, alt_scroll: true };
 let altOn = false;
 
+// Output after a quiet moment, like the echo of a key, is applied at once:
+// waiting for the next animation frame cost half a frame on average. Output
+// that keeps coming is applied once per frame, as laying the page out for
+// every batch made a flood 25 times slower to display.
+const QUIET_MS = 50;
+let scheduled = false;
+let lastFlush = 0;
+
 window.raterm = {
   events(list) {
-    if (!queue.length) requestAnimationFrame(flush);
     queue.push(...list);
+    if (scheduled) return;
+    if (performance.now() - lastFlush > QUIET_MS) return flush();
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      flush();
+    });
   },
 };
 
@@ -80,6 +94,7 @@ function flush() {
   if (cur?.show) showMatch();
   follow();
   requestMore();
+  lastFlush = performance.now();
 }
 
 /// Merges the screen updates of a batch, as only the last state of each row
