@@ -118,11 +118,16 @@ pub struct Line {
     pub wrap: bool,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Debug, Clone, PartialEq, Default)]
 pub struct Run {
     pub text: String,
     #[serde(flatten)]
     pub style: Style,
+    /// The cells the run takes as one unit, to draw whole from its first
+    /// cell: a char with zero-width chars after it (combining marks), and the
+    /// chars a joiner (ZWJ) puts after it; 0 for a run of plain chars.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub cluster: u8,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, Default)]
@@ -450,6 +455,7 @@ impl Terminal {
         let mut runs: Vec<Run> = Vec::new();
         // Building a style allocates: only do it when the attributes change.
         let mut last = None;
+        let mut style = Style::default();
         for (x, cell) in cells[..end].iter().enumerate() {
             if cell
                 .flags
@@ -469,18 +475,39 @@ impl Terminal {
                 url,
             ));
             if key != last {
-                let mut style = self.style(cell, Some(x) == cursor);
+                style = self.style(cell, Some(x) == cursor);
                 style.link = cell
                     .hyperlink()
                     .map(|h| h.uri().to_owned())
                     .or_else(|| url.map(|i| chars[urls[i].0..urls[i].1].iter().collect()));
-                if runs.last().is_none_or(|run| run.style != style) {
-                    runs.push(Run {
-                        text: String::new(),
-                        style,
-                    });
-                }
                 last = key;
+            }
+            let width = if cell.flags.contains(Flags::WIDE_CHAR) {
+                2
+            } else {
+                1
+            };
+            let joined = runs
+                .last()
+                .is_some_and(|run| run.cluster > 0 && run.text.ends_with('\u{200d}'));
+            if joined {
+                let run = runs.last_mut().unwrap();
+                run.cluster = run.cluster.saturating_add(width);
+            } else if cell.zerowidth().is_some_and(|z| !z.is_empty()) {
+                runs.push(Run {
+                    text: String::new(),
+                    style: style.clone(),
+                    cluster: width,
+                });
+            } else if runs
+                .last()
+                .is_none_or(|run| run.cluster > 0 || run.style != style)
+            {
+                runs.push(Run {
+                    text: String::new(),
+                    style: style.clone(),
+                    cluster: 0,
+                });
             }
             let text = &mut runs.last_mut().unwrap().text;
             text.push(cell.c);
@@ -597,6 +624,10 @@ impl Line {
     fn text(&self) -> String {
         self.runs.iter().map(|r| r.text.as_str()).collect()
     }
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 fn is_blank(cell: &Cell) -> bool {
@@ -930,6 +961,38 @@ mod tests {
         assert_eq!(found(term.search("me", None, true)), Some((0, 9)));
         assert_eq!(found(term.search("found a &", None, true)), Some((1, 0)));
         assert_eq!(found(term.search("b>", None, true)), None);
+    }
+
+    #[test]
+    fn cells_with_combining_chars_are_runs_of_their_own() {
+        let mut term = Terminal::new(10, 1);
+        let update = term.advance("ae\u{301}b".as_bytes());
+        let [Event::Lines { rows, .. }] = &update.events[..] else {
+            panic!()
+        };
+        let runs: Vec<_> = rows[0]
+            .line
+            .runs
+            .iter()
+            .map(|r| (r.text.as_str(), r.cluster))
+            .collect();
+        assert_eq!(runs[..3], [("a", 0), ("e\u{301}", 1), ("b", 0)]);
+    }
+
+    #[test]
+    fn a_joiner_puts_the_next_char_in_the_same_unit() {
+        let mut term = Terminal::new(10, 1);
+        let update = term.advance("👩\u{200d}💻x".as_bytes());
+        let [Event::Lines { rows, .. }] = &update.events[..] else {
+            panic!()
+        };
+        let runs: Vec<_> = rows[0]
+            .line
+            .runs
+            .iter()
+            .map(|r| (r.text.as_str(), r.cluster))
+            .collect();
+        assert_eq!(runs[..2], [("👩\u{200d}💻", 4), ("x", 0)]);
     }
 
     #[test]

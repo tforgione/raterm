@@ -156,7 +156,7 @@ mod tests {
         Line {
             runs: vec![Run {
                 text: text.into(),
-                style: Default::default(),
+                ..Default::default()
             }],
             wrap,
         }
