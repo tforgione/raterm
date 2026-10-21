@@ -5,14 +5,14 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 
 use gtk::prelude::*;
 use gtk::{cairo, gdk, glib, pango};
-use raterm::config::Config;
+use raterm::config::{self, Config};
 use raterm::history::Entry;
 use raterm::pty::Error;
 use raterm::rich::{Kind, Rendered};
@@ -34,13 +34,57 @@ enum UserEvent {
     Exit,
 }
 
-// The default theme of style.css.
-const FG: u32 = 0xd8dee9;
-const BG: u32 = 0x151618;
-const PALETTE: [u32; 16] = [
-    0x2e3440, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xd8dee9, 0x5c6370,
-    0xf08088, 0xb5e890, 0xf5d58e, 0x82c4ff, 0xda9cf0, 0x7fd4de, 0xffffff,
-];
+struct Theme {
+    fg: u32,
+    bg: u32,
+    cursor: u32,
+    palette: [u32; 16],
+}
+
+/// The default theme of style.css, with the colors of `user.css` over it:
+/// until the palette has a place in config.toml (Spec-Native-grid), the
+/// native view reads the same variables as the page.
+fn theme() -> &'static Theme {
+    static THEME: OnceLock<Theme> = OnceLock::new();
+    THEME.get_or_init(|| {
+        let mut theme = Theme {
+            fg: 0xd8dee9,
+            bg: 0x151618,
+            cursor: 0xd8dee9,
+            palette: [
+                0x2e3440, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xd8dee9,
+                0x5c6370, 0xf08088, 0xb5e890, 0xf5d58e, 0x82c4ff, 0xda9cf0, 0x7fd4de, 0xffffff,
+            ],
+        };
+        let css = std::fs::read_to_string(config::dir().join("user.css")).unwrap_or_default();
+        for decl in css.split([';', '{', '}']) {
+            let Some((name, value)) = decl.split_once(':') else {
+                continue;
+            };
+            let Some(rgb) = value
+                .trim()
+                .strip_prefix('#')
+                .and_then(|h| u32::from_str_radix(h, 16).ok())
+            else {
+                continue;
+            };
+            match name.trim().strip_prefix("--") {
+                Some("fg") => theme.fg = rgb,
+                Some("bg") => theme.bg = rgb,
+                Some("cursor") => theme.cursor = rgb,
+                Some(c) => {
+                    if let Some(i) = c.strip_prefix('c').and_then(|i| i.parse::<usize>().ok())
+                        && i < 16
+                    {
+                        theme.palette[i] = rgb;
+                    }
+                }
+                None => {}
+            }
+        }
+        theme
+    })
+}
 const PAD_X: f64 = 4.0;
 const PAD_Y: f64 = 2.0;
 /// Rows a block takes until its web view has measured it.
@@ -73,6 +117,9 @@ struct View {
     heights: Rc<RefCell<HashMap<u64, f64>>>,
     context: Option<WebContext>,
     redraw: Arc<Redraw>,
+    /// This view, for the handlers of the web views it makes.
+    me: Weak<RefCell<View>>,
+    block_style: String,
 }
 
 /// Asks the event loop for a redraw, once until it is done.
@@ -121,9 +168,11 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         proxy: Mutex::new(proxy.clone()),
     });
     let modes = Arc::new(Mutex::new(Modes::default()));
+    let cell = measure(&area, &font);
     let view = Rc::new(RefCell::new(View {
         session: session.clone(),
-        cell: measure(&area, &font),
+        block_style: block_style(&config, cell.0),
+        cell,
         area: area.clone(),
         fixed,
         font,
@@ -134,7 +183,9 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         heights: Rc::default(),
         context: None,
         redraw: redraw.clone(),
+        me: Weak::new(),
     }));
+    view.borrow_mut().me = Rc::downgrade(&view);
 
     {
         let view = view.clone();
@@ -150,14 +201,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     {
         let view = view.clone();
         area.connect_scroll_event(move |_, ev| {
-            let dy = match ev.direction() {
-                gdk::ScrollDirection::Up => -1.0,
-                gdk::ScrollDirection::Down => 1.0,
-                _ => ev.delta().1,
-            };
-            let mut view = view.borrow_mut();
-            view.scroll = (view.scroll as f64 - 3.0 * dy).max(0.0) as usize;
-            view.layout();
+            view.borrow_mut().wheel(ev);
             glib::Propagation::Stop
         });
     }
@@ -288,6 +332,16 @@ impl View {
         }
     }
 
+    fn wheel(&mut self, ev: &gdk::EventScroll) {
+        let dy = match ev.direction() {
+            gdk::ScrollDirection::Up => -1.0,
+            gdk::ScrollDirection::Down => 1.0,
+            _ => ev.delta().1,
+        };
+        self.scroll = (self.scroll as f64 - 3.0 * dy).max(0.0) as usize;
+        self.layout();
+    }
+
     fn scroll_to_end(&mut self) {
         if self.scroll != 0 {
             self.scroll = 0;
@@ -405,7 +459,7 @@ impl View {
     }
 
     fn draw(&self, cr: &cairo::Context) {
-        set_color(cr, BG, 1.0);
+        set_color(cr, theme().bg, 1.0);
         let _ = cr.paint();
         let style = self.area.style_context();
         self.session.read(|term| {
@@ -441,10 +495,10 @@ impl View {
             }
             let class = &run.style.class;
             let cursor = class.contains("cursor");
-            let mut fg = color(run.style.fg.as_deref()).unwrap_or(FG);
+            let mut fg = color(run.style.fg.as_deref()).unwrap_or(theme().fg);
             let mut bg = color(run.style.bg.as_deref());
             if cursor {
-                (fg, bg) = (BG, Some(FG));
+                (fg, bg) = (theme().bg, Some(theme().cursor));
             }
             let wide = if class.contains("wide") { 2 } else { 1 };
             // The chars of the run in this row, with their cell.
@@ -512,8 +566,19 @@ impl View {
             // height) still can, from the API.
             settings.set_enable_javascript_markup(false);
         }
-        view.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+        // Opaque: WebKit repaints only what changes (a selection), and a
+        // transparent view lost the rest of the block.
+        let bg = |shift: u32| ((theme().bg >> shift) & 0xff) as f64 / 255.0;
+        view.set_background_color(&gdk::RGBA::new(bg(16), bg(8), bg(0), 1.0));
         view.set_can_focus(false);
+        // The wheel scrolls the terminal, over blocks too.
+        let me = self.me.clone();
+        view.connect_scroll_event(move |_, ev| {
+            if let Some(view) = me.upgrade() {
+                view.borrow_mut().wheel(ev);
+            }
+            glib::Propagation::Stop
+        });
         view.connect_decide_policy(|_, decision, kind| {
             if kind != PolicyDecisionType::NavigationAction {
                 return false;
@@ -537,7 +602,8 @@ impl View {
         view.connect_load_changed(|view, event| {
             if event == LoadEvent::Finished {
                 view.evaluate_javascript(
-                    "document.title = document.documentElement.scrollHeight",
+                    // The body: the document is never smaller than the view.
+                    "document.title = Math.ceil(document.body.getBoundingClientRect().height)",
                     None,
                     None,
                     None::<&gtk::gio::Cancellable>,
@@ -554,33 +620,96 @@ impl View {
                 redraw.request();
             }
         });
-        view.load_html(&document(block), None);
+        view.load_html(&document(block, &self.block_style), None);
         view
     }
 }
 
+/// The stylesheet of blocks, the same as `richStyle` in app.js.
+fn block_style(config: &Config, cell_width: f64) -> String {
+    let t = theme();
+    let vars: String = (0..16)
+        .map(|i| format!("--c{i}: #{:06x}; ", t.palette[i]))
+        .collect();
+    let columns = config.markdown.max_width;
+    let text_width = if columns > 0 {
+        format!("{}px", columns as f64 * cell_width)
+    } else {
+        "none".into()
+    };
+    format!(
+        r#":root {{ --fg: #{fg:06x}; --bg: #{bg:06x}; --inline-code: #e8857f; {vars} color-scheme: dark; }}
+html, body {{ margin: 0; color: var(--fg); background: var(--bg); overflow: hidden; }}
+body {{ font: {size}pt/1.5 {family}; padding: 4px 0; overflow-x: auto; }}
+a {{ color: var(--c4); }}
+pre, code {{ font-family: {mono}; font-size: 0.9em; }}
+:not(pre) > code {{ color: var(--inline-code); background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; padding: 0.1em 0.35em;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone; }}
+pre {{ padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }}
+.comment {{ color: var(--c8); font-style: italic; }}
+.string {{ color: var(--c2); }}
+.constant {{ color: var(--c3); }}
+.keyword, .storage {{ color: var(--c5); }}
+.keyword.operator {{ color: inherit; }}
+.entity.name.function, .support.function {{ color: var(--c4); }}
+.entity.name.type, .entity.name.class, .support.type, .support.class {{ color: var(--c6); }}
+.entity.name.tag {{ color: var(--c1); }}
+.entity.other.attribute-name {{ color: var(--c3); }}
+table {{ border-collapse: collapse; margin: 8px 0; }}
+th, td {{ border: 1px solid var(--c8); padding: 4px 10px; text-align: left; vertical-align: top; }}
+th {{ background: rgba(255, 255, 255, 0.08); }}
+tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.04); }}
+img {{ max-width: 100%; }}
+body.md > * {{ max-width: {text_width}; margin-left: auto; margin-right: auto; }}
+body.md > table {{ max-width: none; margin: 8px auto; }}
+"#,
+        fg = t.fg,
+        bg = t.bg,
+        size = config.blocks.font_size,
+        family = css_fonts(&config.blocks.font_family, "sans-serif"),
+        mono = css_fonts(&config.font.family, "monospace"),
+    )
+}
+
+/// A CSS font-family from configured names, quoted (`fontFamily` in app.js).
+fn css_fonts(names: &str, fallback: &str) -> String {
+    const GENERIC: [&str; 6] = [
+        "serif",
+        "sans-serif",
+        "monospace",
+        "cursive",
+        "fantasy",
+        "system-ui",
+    ];
+    names
+        .split(',')
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+        .map(|n| {
+            if GENERIC.contains(&n) {
+                n.to_owned()
+            } else {
+                format!("{n:?}")
+            }
+        })
+        .chain([fallback.to_owned()])
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The document of a block, as the page's iframes have it: no network, no
-/// script, the terminal's colors.
-fn document(block: &Rendered) -> String {
+/// script.
+fn document(block: &Rendered, style: &str) -> String {
     let body = match block.kind {
         Kind::Img | Kind::Svg => format!(r#"<img src="{}">"#, block.content),
         _ => block.content.clone(),
     };
+    let kind = format!("{:?}", block.kind).to_lowercase();
     format!(
         r#"<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
-<style>
-:root {{ color-scheme: dark; }}
-html, body {{ margin: 0; color: #{FG:06x}; background: transparent; overflow: hidden; }}
-body {{ font: 12pt/1.5 sans-serif; padding: 4px 0; }}
-a {{ color: #{:06x}; }}
-pre, code {{ font-family: monospace; font-size: 0.9em; }}
-pre {{ padding: 8px; background: rgba(255, 255, 255, 0.05); }}
-table {{ border-collapse: collapse; margin: 8px 0; }}
-th, td {{ border: 1px solid #{:06x}; padding: 4px 10px; text-align: left; }}
-img {{ max-width: 100%; }}
-</style></head><body class="{:?}">{body}</body></html>"#,
-        PALETTE[4], PALETTE[8], block.kind
+<style>{style}</style></head><body class="{kind}">{body}</body></html>"#
     )
 }
 
@@ -596,9 +725,10 @@ fn color(spec: Option<&str>) -> Option<u32> {
         return u32::from_str_radix(hex, 16).ok();
     }
     match spec.strip_prefix("var(--")?.strip_suffix(')')? {
-        "fg" => Some(FG),
-        "bg" => Some(BG),
-        c => PALETTE
+        "fg" => Some(theme().fg),
+        "bg" => Some(theme().bg),
+        c => theme()
+            .palette
             .get(c.strip_prefix('c')?.parse::<usize>().ok()?)
             .copied(),
     }
