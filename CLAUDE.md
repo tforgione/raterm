@@ -16,8 +16,11 @@ messages de commit sont en anglais.
   `pty`, `term` (état via `alacritty_terminal`, diff d'écran, événements),
   `rich` (filtre OSC 7117, rendu Markdown avec comrak + syntect), `media`
   (registre et serveur HTTP local des vidéos), `session`, `config`.
-- `crates/raterm/src/view.rs` et `main.rs` : le binaire. `view` est le seul
-  module qui connaît wry/tao.
+- `crates/raterm/src/native/`, `view.rs` et `main.rs` : le binaire. `native`
+  est la vue par défaut (grille dessinée par GTK/Pango, blocs en webviews
+  enfants, voir `Spec-Native-grid`) ; `view` est l'ancienne vue tout-web,
+  derrière `--web` jusqu'à M6c. Ce sont les seuls modules qui connaissent la
+  fenêtre.
 - `crates/raterm/assets/` : la page (`index.html`, `style.css`, `app.js`),
   embarquée dans le binaire et servie sous `raterm://app/`.
 - `crates/rat/` : le second binaire, sans wry.
