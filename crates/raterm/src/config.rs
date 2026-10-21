@@ -1,7 +1,7 @@
 //! User configuration, read from `$XDG_CONFIG_HOME/raterm/config.toml`.
 //!
-//! Colors are not configured here: they are CSS variables, overridden in
-//! `user.css` next to this file.
+//! Colors set in `[colors]` go over those of `user.css`, next to this file,
+//! which also styles the page and the blocks.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ pub struct Config {
     /// The window title follows the title set by programs (OSC 0/2).
     pub dynamic_title: bool,
     pub font: Font,
+    pub colors: Colors,
     pub cursor: Cursor,
     pub window: Window,
     pub images: Images,
@@ -28,6 +29,41 @@ pub struct Config {
     /// Shortcuts, as `"ctrl+shift+c" = "copy"` or `"f13" = { send = "..." }`,
     /// merged over the defaults; `"none"` removes a default.
     pub keys: BTreeMap<String, Binding>,
+}
+
+/// The palette, as in alacritty; each color unset comes from `user.css`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Colors {
+    pub foreground: Option<Rgb>,
+    pub background: Option<Rgb>,
+    pub cursor: Option<Rgb>,
+    pub selection: Option<Rgb>,
+    pub selection_text: Option<Rgb>,
+    /// Colors 0 to 7, then 8 to 15.
+    pub normal: Vec<Rgb>,
+    pub bright: Vec<Rgb>,
+}
+
+/// A color written `#rrggbb`: nothing else can reach the page's CSS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rgb(pub u32);
+
+impl<'de> Deserialize<'de> for Rgb {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        text.strip_prefix('#')
+            .filter(|hex| hex.len() == 6)
+            .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+            .map(Rgb)
+            .ok_or_else(|| serde::de::Error::custom(format!("not a #rrggbb color: {text:?}")))
+    }
+}
+
+impl Serialize for Rgb {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&format!("#{:06x}", self.0))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -116,6 +152,7 @@ impl Default for Config {
             bold_is_bright: false,
             dynamic_title: true,
             font: Font::default(),
+            colors: Colors::default(),
             cursor: Cursor::default(),
             window: Window::default(),
             images: Images::default(),
@@ -217,6 +254,22 @@ mod tests {
                 send: "\x1b[5;2~".into()
             }
         );
+    }
+
+    #[test]
+    fn colors_are_rrggbb() {
+        let config = Config::parse(
+            "[colors]\nforeground = \"#eaeaea\"\nnormal = [\"#000000\", \"#cd0000\"]\n",
+        )
+        .unwrap();
+        assert_eq!(config.colors.foreground, Some(Rgb(0xeaeaea)));
+        assert_eq!(config.colors.normal, [Rgb(0), Rgb(0xcd0000)]);
+        assert_eq!(
+            serde_json::to_string(&config.colors.foreground).unwrap(),
+            "\"#eaeaea\""
+        );
+        assert!(Config::parse("[colors]\nbackground = \"red\"\n").is_err());
+        assert!(Config::parse("[colors]\nbackground = \"#fff;}\"\n").is_err());
     }
 
     #[test]

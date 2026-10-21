@@ -25,6 +25,13 @@ function fontFamily(names, fallback) {
 }
 
 root.style.setProperty("--font-family", fontFamily(config.font.family, "monospace"));
+// [colors] of config.toml: inline, so over user.css.
+const COLOR_VARS = { foreground: "--fg", background: "--bg", cursor: "--cursor", selection: "--selection", selection_text: "--selection-text" };
+for (const [key, name] of Object.entries(COLOR_VARS)) {
+  if (config.colors[key]) root.style.setProperty(name, config.colors[key]);
+}
+config.colors.normal.forEach((color, i) => root.style.setProperty(`--c${i}`, color));
+config.colors.bright.forEach((color, i) => root.style.setProperty(`--c${i + 8}`, color));
 document.body.classList.add(`cursor-${config.cursor.style}`);
 if (config.cursor.blink) {
   setInterval(() => document.body.classList.toggle("blink-off"), 530);

@@ -18,60 +18,79 @@ pub(super) struct Theme {
     pub(super) palette: [u32; 16],
 }
 
-/// The default theme of style.css, with the colors of `user.css` over it:
-/// until the palette has a place in config.toml (Spec-Native-grid), the
-/// native view reads the same variables as the page.
+static THEME: OnceLock<Theme> = OnceLock::new();
+
+/// Sets the colors, once, before the view draws anything.
+pub(super) fn init_theme(colors: &config::Colors) {
+    let _ = THEME.set(load(colors));
+}
+
 pub(super) fn theme() -> &'static Theme {
-    static THEME: OnceLock<Theme> = OnceLock::new();
-    THEME.get_or_init(|| {
-        let mut theme = Theme {
-            fg: 0xd8dee9,
-            bg: 0x151618,
-            cursor: 0xd8dee9,
-            // Selected text is shown inverted, as in style.css.
-            selection: 0xd8dee9,
-            selection_text: 0x151618,
-            palette: [
-                0x2e3440, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xd8dee9,
-                0x5c6370, 0xf08088, 0xb5e890, 0xf5d58e, 0x82c4ff, 0xda9cf0, 0x7fd4de, 0xffffff,
-            ],
+    THEME.get_or_init(|| load(&config::Colors::default()))
+}
+
+/// The default theme of style.css, the colors of `user.css` over it, then
+/// those of `[colors]` in config.toml.
+fn load(colors: &config::Colors) -> Theme {
+    let mut theme = Theme {
+        fg: 0xd8dee9,
+        bg: 0x151618,
+        cursor: 0xd8dee9,
+        selection: 0xd8dee9,
+        selection_text: 0x151618,
+        palette: [
+            0x2e3440, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xd8dee9,
+            0x5c6370, 0xf08088, 0xb5e890, 0xf5d58e, 0x82c4ff, 0xda9cf0, 0x7fd4de, 0xffffff,
+        ],
+    };
+    let css = std::fs::read_to_string(config::dir().join("user.css")).unwrap_or_default();
+    let (mut selection, mut selection_text) = (None, None);
+    for decl in css.split([';', '{', '}']) {
+        let Some((name, value)) = decl.split_once(':') else {
+            continue;
         };
-        let css = std::fs::read_to_string(config::dir().join("user.css")).unwrap_or_default();
-        for decl in css.split([';', '{', '}']) {
-            let Some((name, value)) = decl.split_once(':') else {
-                continue;
-            };
-            let Some(rgb) = value
-                .trim()
-                .strip_prefix('#')
-                .and_then(|h| u32::from_str_radix(h, 16).ok())
-            else {
-                continue;
-            };
-            match name.trim().strip_prefix("--") {
-                Some("fg") => theme.fg = rgb,
-                Some("bg") => theme.bg = rgb,
-                Some("cursor") => theme.cursor = rgb,
-                Some("selection") => theme.selection = rgb,
-                Some("selection-text") => theme.selection_text = rgb,
-                Some(c) => {
-                    if let Some(i) = c.strip_prefix('c').and_then(|i| i.parse::<usize>().ok())
-                        && i < 16
-                    {
-                        theme.palette[i] = rgb;
-                    }
+        let Some(rgb) = value
+            .trim()
+            .strip_prefix('#')
+            .and_then(|h| u32::from_str_radix(h, 16).ok())
+        else {
+            continue;
+        };
+        match name.trim().strip_prefix("--") {
+            Some("fg") => theme.fg = rgb,
+            Some("bg") => theme.bg = rgb,
+            Some("cursor") => theme.cursor = rgb,
+            Some("selection") => selection = Some(rgb),
+            Some("selection-text") => selection_text = Some(rgb),
+            Some(c) => {
+                if let Some(i) = c.strip_prefix('c').and_then(|i| i.parse::<usize>().ok())
+                    && i < 16
+                {
+                    theme.palette[i] = rgb;
                 }
-                None => {}
             }
+            None => {}
         }
-        if !css.contains("--selection:") {
-            theme.selection = theme.fg;
-        }
-        if !css.contains("--selection-text:") {
-            theme.selection_text = theme.bg;
-        }
-        theme
-    })
+    }
+    let rgb = |c: Option<config::Rgb>| c.map(|c| c.0);
+    theme.fg = rgb(colors.foreground).unwrap_or(theme.fg);
+    theme.bg = rgb(colors.background).unwrap_or(theme.bg);
+    theme.cursor = rgb(colors.cursor).unwrap_or(theme.cursor);
+    for (i, c) in colors
+        .normal
+        .iter()
+        .chain(&colors.bright)
+        .take(16)
+        .enumerate()
+    {
+        theme.palette[i] = c.0;
+    }
+    // Selected text is shown inverted, as in style.css, unless set.
+    theme.selection = rgb(colors.selection).or(selection).unwrap_or(theme.fg);
+    theme.selection_text = rgb(colors.selection_text)
+        .or(selection_text)
+        .unwrap_or(theme.bg);
+    theme
 }
 
 /// Width and height of a cell of the font, in pixels.

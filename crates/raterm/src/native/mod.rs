@@ -113,6 +113,8 @@ impl Redraw {
 }
 
 pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
+    // First: everything that draws reads it.
+    draw::init_theme(&config.colors);
     let (session, reader) = Session::spawn(&config, command, 80, 24)?;
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
