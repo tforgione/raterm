@@ -8,7 +8,7 @@ mod keys;
 mod search;
 mod select;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -94,6 +94,11 @@ struct View {
     search: Option<Search>,
     search_entry: gtk::Entry,
     overlay: gtk::Overlay,
+    /// When the view last scrolled: a thin indicator shows where it is in the
+    /// flow, then fades, as GTK's overlay scrollbars (see draw.rs).
+    scrolled_at: Rc<Cell<Option<std::time::Instant>>>,
+    /// The scroll at the last layout, to see it change.
+    laid_scroll: usize,
     /// The image shown full window, made on its first use.
     viewer: Option<WebView>,
     /// `[images] max_height` of the configuration.
@@ -186,6 +191,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         search: None,
         search_entry: search_entry.clone(),
         overlay: overlay.clone(),
+        scrolled_at: Rc::default(),
+        laid_scroll: 0,
         viewer: None,
         max_image_lines: config.images.max_height,
         modes: modes.clone(),
@@ -824,7 +831,32 @@ impl View {
             }
             keep
         });
+        if self.scroll != self.laid_scroll {
+            self.laid_scroll = self.scroll;
+            self.show_indicator();
+        }
         self.area.queue_draw();
+    }
+
+    /// Shows the scroll indicator, and redraws while it fades.
+    fn show_indicator(&self) {
+        let fading = self.scrolled_at.get().is_some();
+        self.scrolled_at.set(Some(std::time::Instant::now()));
+        if fading {
+            return;
+        }
+        let (scrolled_at, area) = (self.scrolled_at.clone(), self.area.clone());
+        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+            area.queue_draw();
+            if scrolled_at
+                .get()
+                .is_some_and(|t| t.elapsed() > draw::INDICATOR_SHOWN)
+            {
+                scrolled_at.set(None);
+                return glib::ControlFlow::Break;
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     /// The rows in view, top to bottom; the flow starts at the top of the view

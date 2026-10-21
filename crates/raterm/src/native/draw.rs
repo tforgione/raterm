@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use gtk::prelude::*;
 use gtk::{cairo, pango};
 use raterm::config;
-use raterm::term::{Line, Run};
+use raterm::term::{Line, Run, Terminal};
 
 use super::{PAD_X, PAD_Y, View, Visual};
 
@@ -133,7 +133,69 @@ impl View {
                     self.draw_line(cr, &style, line, start, y, &marks);
                 }
             }
+            self.draw_indicator(cr, term);
         });
+    }
+
+    /// A thin rounded bar at the right edge, where the view is in the flow:
+    /// fully shown while scrolling, then fading. The flow counts a row per
+    /// entry of the history, as the page's spacers: exact for most lines.
+    fn draw_indicator(&self, cr: &cairo::Context, term: &Terminal) {
+        let Some(at) = self.scrolled_at.get() else {
+            return;
+        };
+        let age = at.elapsed();
+        let alpha = if age < INDICATOR_SOLID {
+            0.5
+        } else {
+            0.5 * (1.0
+                - (age - INDICATOR_SOLID).as_secs_f64()
+                    / (INDICATOR_SHOWN - INDICATOR_SOLID).as_secs_f64())
+        };
+        let rows = self.size.1 as f64;
+        let used = term
+            .screen()
+            .iter()
+            .rposition(|l| !l.runs.is_empty())
+            .map_or(1, |y| y + 1);
+        let total = (term.history.next() - term.history.first()) as f64 + used as f64;
+        if alpha <= 0.0 || term.alt_screen() || total <= rows {
+            return;
+        }
+        let (w, h) = (
+            self.area.allocated_width() as f64,
+            self.area.allocated_height() as f64,
+        );
+        let track = h - 4.0;
+        let height = (rows / total * track).max(24.0);
+        let top = (total - rows - self.scroll as f64).max(0.0) / (total - rows) * (track - height);
+        let (x, y, width, r) = (w - 5.0, 2.0 + top, 3.0, 1.5);
+        set_color(cr, theme().fg, alpha);
+        cr.new_sub_path();
+        cr.arc(
+            x + r,
+            y + r,
+            r,
+            std::f64::consts::PI,
+            1.5 * std::f64::consts::PI,
+        );
+        cr.arc(x + width - r, y + r, r, 1.5 * std::f64::consts::PI, 0.0);
+        cr.arc(
+            x + width - r,
+            y + height - r,
+            r,
+            0.0,
+            0.5 * std::f64::consts::PI,
+        );
+        cr.arc(
+            x + r,
+            y + height - r,
+            r,
+            0.5 * std::f64::consts::PI,
+            std::f64::consts::PI,
+        );
+        cr.close_path();
+        let _ = cr.fill();
     }
 
     /// Draws cells `start..start + cols` of a line at height `y`, with the
@@ -243,6 +305,10 @@ impl View {
         }
     }
 }
+
+/// How long the scroll indicator stays, then how long until it starts fading.
+pub(super) const INDICATOR_SHOWN: std::time::Duration = std::time::Duration::from_millis(1200);
+const INDICATOR_SOLID: std::time::Duration = std::time::Duration::from_millis(800);
 
 /// The cells of a line drawn in other colors than their own.
 struct Marks {
