@@ -194,11 +194,12 @@ impl View {
         if class.contains("cursor") {
             (fg, bg) = (theme().bg, Some(theme().cursor));
         }
-        // As ::selection and ::highlight(search...) in style.css.
+        // Matches in WebKit's colors, which raterm cannot change in blocks:
+        // yellow behind the text, the current one as selected.
         match mark {
             Mark::None => {}
-            Mark::Found => (fg, bg) = (theme().bg, Some(theme().palette[3])),
-            Mark::Current => (fg, bg) = (theme().bg, Some(theme().palette[9])),
+            Mark::Found => bg = Some(0xffff00),
+            Mark::Current => (fg, bg) = (theme().selection_text, Some(theme().selection)),
             Mark::Selected => (fg, bg) = (theme().selection_text, Some(theme().selection)),
         }
         let x = PAD_X + (chars[0].0 - start) as f64 * cw;

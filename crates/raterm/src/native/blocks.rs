@@ -39,7 +39,21 @@ impl View {
             }
             Find::Next => controller.search_next(),
             Find::Previous => controller.search_previous(),
-            Find::Finish => controller.search_finish(),
+            Find::Finish => return controller.search_finish(),
+        }
+        // Where the match WebKit selected is, to scroll the flow to it: the
+        // block does not scroll itself. The script reaches the web process
+        // after the search; the time makes each answer a new title.
+        if let Some(view) = self.blocks.get(&entry) {
+            view.evaluate_javascript(
+                "document.title = 'f:' + (getSelection().rangeCount \
+                 ? Math.round(getSelection().getRangeAt(0).getBoundingClientRect().top) : -1) \
+                 + ':' + Date.now()",
+                None,
+                None,
+                None::<&gtk::gio::Cancellable>,
+                |_| {},
+            );
         }
     }
 
@@ -156,7 +170,7 @@ impl View {
             if event == LoadEvent::Finished {
                 view.evaluate_javascript(
                     // The body: the document is never smaller than the view.
-                    "document.title = Math.ceil(document.body.getBoundingClientRect().height)",
+                    "document.title = 'h:' + Math.ceil(document.body.getBoundingClientRect().height)",
                     None,
                     None,
                     None::<&gtk::gio::Cancellable>,
@@ -166,11 +180,23 @@ impl View {
         });
         let redraw = self.redraw.clone();
         let heights = Rc::downgrade(&self.heights);
+        let me = self.me.clone();
         view.connect_title_notify(move |view| {
-            let height = view.title().and_then(|t| t.parse::<f64>().ok());
-            if let (Some(h), Some(heights)) = (height, heights.upgrade()) {
+            let Some(title) = view.title() else { return };
+            if let Some(h) = title.strip_prefix("h:").and_then(|h| h.parse::<f64>().ok())
+                && let Some(heights) = heights.upgrade()
+            {
                 heights.borrow_mut().insert(entry, h);
                 redraw.request();
+            }
+            if let Some(top) = title
+                .strip_prefix("f:")
+                .and_then(|f| f.split(':').next()?.parse::<f64>().ok())
+                && top >= 0.0
+                && let Some(this) = me.upgrade()
+                && let Ok(mut this) = this.try_borrow_mut()
+            {
+                this.reveal_in_block(entry, top);
             }
         });
         view.load_html(&document(block, &self.block_style), None);

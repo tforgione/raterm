@@ -581,6 +581,15 @@ impl View {
         rows
     }
 
+    /// Scrolls the flow to put height `top` of a block in the middle.
+    fn reveal_in_block(&mut self, entry: u64, top: f64) {
+        let rows = self.block_rows(entry);
+        let row = ((top / self.cell.1) as usize).min(rows.saturating_sub(1));
+        let below = self.session.read(|t| self.rows_below(t, entry)) + rows - 1 - row;
+        self.scroll = below.saturating_sub(self.size.1 as usize / 2);
+        self.layout();
+    }
+
     fn open_search(&mut self) {
         self.search.get_or_insert_default();
         self.search_entry.show();

@@ -120,8 +120,9 @@ html, body {
   border-color: var(--c1);
 }
 
-::highlight(search) { background-color: var(--c3); color: var(--bg); }
-::highlight(search-current) { background-color: var(--c9); color: var(--bg); }
+/* WebKit's colors for its own search, as in the native view's blocks. */
+::highlight(search) { background-color: #ffff00; }
+::highlight(search-current) { background-color: var(--selection); color: var(--selection-text); }
 
 #input {
   position: fixed;
