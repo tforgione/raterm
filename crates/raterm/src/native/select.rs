@@ -5,7 +5,7 @@
 use raterm::history::Entry;
 use raterm::term::{Line, Terminal};
 
-use super::draw::cells;
+use super::draw::{cells, units};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Pos {
@@ -46,18 +46,20 @@ fn item(term: &Terminal, at: u64) -> Option<Item<'_>> {
     }
 }
 
-/// The chars of a line with the cell each starts at.
-pub(super) fn chars(line: &Line) -> Vec<(usize, char)> {
+/// What each cell of a line holds (a char, with its zero-width chars), with
+/// the cell it starts at.
+pub(super) fn chars(line: &Line) -> Vec<(usize, &str)> {
     let mut out = Vec::new();
     let mut col = 0;
     for run in &line.runs {
-        let wide = cells(run) / run.text.chars().count().max(1);
-        for c in run.text.chars() {
-            out.push((col, c));
-            col += wide;
-        }
+        out.extend(units(run).into_iter().map(|(x, text)| (col + x, text)));
+        col += cells(run);
     }
     out
+}
+
+fn first(text: &str) -> char {
+    text.chars().next().unwrap_or(' ')
 }
 
 /// Separators of words on a double click, as alacritty's `semantic_escape_chars`.
@@ -83,17 +85,17 @@ impl Selection {
                 if let Some(Item::Line(line)) = item(term, a.at) {
                     let cs = chars(line);
                     let i = cs.iter().rposition(|&(x, _)| x <= a.cell);
-                    if let Some(i) = i.filter(|&i| word_char(cs[i].1)) {
-                        let start = cs[..i].iter().rposition(|&(_, c)| !word_char(c));
+                    if let Some(i) = i.filter(|&i| word_char(first(cs[i].1))) {
+                        let start = cs[..i].iter().rposition(|&(_, c)| !word_char(first(c)));
                         a.cell = start.map_or(0, |s| cs[s + 1].0);
                     }
                 }
                 if let Some(Item::Line(line)) = item(term, b.at) {
                     let cs = chars(line);
                     if let Some(i) = cs.iter().rposition(|&(x, _)| x <= b.cell)
-                        && word_char(cs[i].1)
+                        && word_char(first(cs[i].1))
                     {
-                        let end = cs[i..].iter().position(|&(_, c)| !word_char(c));
+                        let end = cs[i..].iter().position(|&(_, c)| !word_char(first(c)));
                         b.cell = end.map_or(usize::MAX, |e| cs[i + e].0);
                     } else {
                         b.cell += 1;

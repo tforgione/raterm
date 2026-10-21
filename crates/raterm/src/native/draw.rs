@@ -104,12 +104,40 @@ pub(super) fn measure(area: &gtk::DrawingArea, font: &pango::FontDescription) ->
 
 /// Cells a run takes.
 pub(super) fn cells(run: &Run) -> usize {
-    let wide = if run.style.class.contains("wide") {
+    match run.cluster {
+        0 => run.text.chars().count() * wide(run),
+        n => n as usize,
+    }
+}
+
+/// Cells each char of a run takes.
+fn wide(run: &Run) -> usize {
+    if run.style.class.contains("wide") {
         2
     } else {
         1
-    };
-    run.text.chars().count() * wide
+    }
+}
+
+/// What each cell of a run holds, with the cell it starts at in the run: a
+/// char, or the whole run when it is a unit (see `Run::cluster`).
+pub(super) fn units(run: &Run) -> Vec<(usize, &str)> {
+    if run.cluster > 0 {
+        return vec![(0, run.text.as_str())];
+    }
+    let wide = wide(run);
+    run.text
+        .char_indices()
+        .enumerate()
+        .map(|(i, (at, c))| (i * wide, &run.text[at..at + c.len_utf8()]))
+        .collect()
+}
+
+/// A regional indicator: two of them are a flag.
+fn regional(text: &str) -> bool {
+    text.chars()
+        .next()
+        .is_some_and(|c| ('\u{1f1e6}'..='\u{1f1ff}').contains(&c))
 }
 
 impl View {
@@ -230,13 +258,11 @@ impl View {
             if col >= start + cols {
                 break;
             }
-            let wide = n / run.text.chars().count().max(1);
-            // The chars of the run in this row, with their cell.
-            let chars: Vec<(usize, char)> = run
-                .text
-                .chars()
-                .enumerate()
-                .map(|(i, c)| (col + i * wide, c))
+            let wide = wide(run);
+            // The cells of the run in this row, with what each holds.
+            let chars: Vec<(usize, &str)> = units(run)
+                .into_iter()
+                .map(|(x, text)| (col + x, text))
                 .filter(|&(x, _)| x >= start && x < start + cols)
                 .collect();
             col += n;
@@ -253,7 +279,7 @@ impl View {
         cr: &cairo::Context,
         style: &gtk::StyleContext,
         run: &Run,
-        chars: &[(usize, char)],
+        chars: &[(usize, &str)],
         start: usize,
         wide: usize,
         y: f64,
@@ -305,13 +331,22 @@ impl View {
             let text: String = chars.iter().map(|&(_, c)| c).collect();
             layout.set_text(&text);
             gtk::render_layout(style, cr, x, y, &layout);
-        } else {
-            // Glyphs of fallback fonts have other widths: each goes to its own
-            // cell, so that the rest of the line stays on the grid.
-            for &(cell, c) in chars {
-                layout.set_text(c.encode_utf8(&mut [0; 4]));
-                gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
+            return;
+        }
+        // Glyphs of fallback fonts have other widths: each cell is drawn at its
+        // place, so that the rest of the line stays on the grid. Two regional
+        // indicators make a flag: drawn as one glyph from the first cell.
+        let mut i = 0;
+        while i < chars.len() {
+            let (cell, first) = chars[i];
+            let mut text = first.to_owned();
+            i += 1;
+            if regional(&text) && i < chars.len() && regional(chars[i].1) {
+                text += chars[i].1;
+                i += 1;
             }
+            layout.set_text(&text);
+            gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
         }
     }
 }

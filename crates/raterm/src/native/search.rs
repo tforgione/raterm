@@ -60,12 +60,15 @@ impl Search {
         let mut units = 0;
         let mut i = 0;
         let mut offsets = Vec::with_capacity(cs.len());
-        for &(_, c) in &cs {
+        for &(_, text) in &cs {
             offsets.push(units);
-            units += lower(c).len_utf16();
+            units += text.chars().map(|c| lower(c).len_utf16()).sum::<usize>();
         }
+        // A cell matches by its char: zero-width chars after it are not
+        // looked at.
+        let first = |text: &str| lower(text.chars().next().unwrap_or(' '));
         while i + n <= cs.len() {
-            if (0..n).all(|k| lower(cs[i + k].1) == self.needle[k]) {
+            if (0..n).all(|k| first(cs[i + k].1) == self.needle[k]) {
                 let range = (cs[i].0, cell_end(i + n));
                 if self
                     .current
