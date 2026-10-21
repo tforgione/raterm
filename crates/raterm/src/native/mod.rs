@@ -633,7 +633,13 @@ impl View {
                 .read(|t| matches!(t.history.get(at), Some(Entry::Block(_))))
         });
         search.block = block;
-        if let Some(at) = current {
+        // In a block already in view, the flow scrolls once WebKit tells where
+        // the match is (reveal_in_block): scrolling to the block first showed
+        // a frame elsewhere. A block out of view needs its web view first.
+        let in_view = block.is_some_and(|b| self.blocks.contains_key(&b));
+        if let Some(at) = current
+            && !in_view
+        {
             let rows = self.size.1 as usize;
             let below = self.session.read(|t| self.rows_below(t, at));
             self.scroll = below.saturating_sub(rows / 2);
