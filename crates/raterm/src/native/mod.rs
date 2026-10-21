@@ -29,7 +29,7 @@ use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
 use webkit2gtk::{WebContext, WebView, WebViewExt};
 
-use blocks::block_style;
+use blocks::{Find, block_style};
 use draw::{cells, measure};
 use keys::encode;
 use search::Search;
@@ -589,6 +589,9 @@ impl View {
     }
 
     fn close_search(&mut self) {
+        if let Some(entry) = self.search.as_ref().and_then(|s| s.block) {
+            self.find_in_block(entry, Find::Finish);
+        }
         self.search = None;
         self.search_entry.hide();
         self.area.grab_focus();
@@ -614,12 +617,46 @@ impl View {
         } else {
             style.add_class("none");
         }
-        if let Some((at, ..)) = search.current {
+        let previous = search.block;
+        let current = search.current.map(|(at, ..)| at);
+        let block = current.filter(|&at| {
+            self.session
+                .read(|t| matches!(t.history.get(at), Some(Entry::Block(_))))
+        });
+        search.block = block;
+        if let Some(at) = current {
             let rows = self.size.1 as usize;
             let below = self.session.read(|t| self.rows_below(t, at));
             self.scroll = below.saturating_sub(rows / 2);
         }
+        // Makes the web view of the block, if it was out of view.
         self.layout();
+        // WebKit moves from match to match along with the core while the
+        // current match stays in the same block.
+        match (previous, block) {
+            (Some(p), Some(b)) if p == b && !restart => self.find_in_block(
+                b,
+                if backwards {
+                    Find::Previous
+                } else {
+                    Find::Next
+                },
+            ),
+            _ => {
+                if let Some(p) = previous {
+                    self.find_in_block(p, Find::Finish);
+                }
+                if let Some(b) = block {
+                    self.find_in_block(
+                        b,
+                        Find::Start {
+                            query: &query,
+                            backwards,
+                        },
+                    );
+                }
+            }
+        }
     }
 
     /// Runs a shortcut's action; false lets the key reach the program.

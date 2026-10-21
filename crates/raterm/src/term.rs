@@ -246,8 +246,9 @@ impl Terminal {
     }
 
     /// The match of `query` next to `from` (an entry and an offset in its
-    /// text, see `Event::Found`), going backwards or forwards over the lines of
-    /// the scrollback and of the screen, and wrapping around. Without `from`,
+    /// text, see `Event::Found`), going backwards or forwards over the lines
+    /// and blocks of the scrollback and the lines of the screen, and wrapping
+    /// around. Without `from`,
     /// starts from the end, or from the beginning forwards.
     pub fn search(&self, query: &str, from: Option<(u64, usize)>, backwards: bool) -> Event {
         let needle = query.to_lowercase();
@@ -255,7 +256,7 @@ impl Terminal {
         let end = next + self.screen.len() as u64;
         let text = |n: u64| match self.history.get(n) {
             Some(Entry::Line(line)) => Some(line.text()),
-            Some(Entry::Block(_)) => None,
+            Some(Entry::Block(block)) => history::block_text(block),
             None => self.screen.get((n - next) as usize).map(Line::text),
         };
         let from = from.filter(|(n, _)| (first..end).contains(n));
@@ -918,6 +919,17 @@ mod tests {
         assert_eq!(found(term.search("x", last, false)), Some((0, 2)));
         assert_eq!(found(term.search("nope", None, true)), None);
         assert_eq!(found(term.search("", None, true)), None);
+    }
+
+    #[test]
+    fn search_finds_text_in_blocks() {
+        let mut term = Terminal::new(20, 2);
+        // "IyBzZWFyY2ggbWU=" is "# search me"; "PGI+Zm91bmQ8L2I+IGEgJmFtcDsgYg==" is
+        // "<b>found</b> a &amp; b".
+        term.advance(b"\x1b]7117;md;IyBzZWFyY2ggbWU=\x07\x1b]7117;html;PGI+Zm91bmQ8L2I+IGEgJmFtcDsgYg==\x07$ ");
+        assert_eq!(found(term.search("me", None, true)), Some((0, 9)));
+        assert_eq!(found(term.search("found a &", None, true)), Some((1, 0)));
+        assert_eq!(found(term.search("b>", None, true)), None);
     }
 
     #[test]

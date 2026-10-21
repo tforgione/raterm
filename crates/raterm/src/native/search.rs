@@ -17,6 +17,9 @@ pub(super) struct Search {
     /// The current match: its line in the flow, and offsets in the text as
     /// the core counts them (UTF-16 units of the lowercased text).
     pub(super) current: Option<(u64, usize, usize)>,
+    /// The block the current match is in, which WebKit searches too, to
+    /// highlight its matches.
+    pub(super) block: Option<u64>,
 }
 
 fn lower(c: char) -> char {

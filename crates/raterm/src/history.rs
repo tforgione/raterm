@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 
 use serde::Serialize;
 
-use crate::rich::Rendered;
+use crate::rich::{Kind, Rendered};
 use crate::term::Line;
 
 /// Entries the page holds at most, and the most the core sends at once: past
@@ -102,6 +102,35 @@ impl History {
                 item: self.get(n).unwrap().clone(),
             })
             .collect()
+    }
+}
+
+/// The text a block is searched in: the source of Markdown, the text of HTML
+/// without its tags; nothing for images and media.
+pub fn block_text(block: &Rendered) -> Option<String> {
+    match block.kind {
+        Kind::Md => block.text.clone(),
+        Kind::Html => {
+            let mut text = String::new();
+            let mut in_tag = false;
+            for c in block.content.chars() {
+                match c {
+                    '<' => in_tag = true,
+                    '>' => in_tag = false,
+                    c if !in_tag => text.push(c),
+                    _ => {}
+                }
+            }
+            Some(
+                text.replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", "\"")
+                    .replace("&#39;", "'")
+                    .replace("&nbsp;", " ")
+                    .replace("&amp;", "&"),
+            )
+        }
+        _ => None,
     }
 }
 

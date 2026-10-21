@@ -807,7 +807,10 @@ function showMatch() {
   }
   cur.show = false;
   CSS.highlights.set("search", new Highlight(...findAll(searchInput.value)));
-  CSS.highlights.set("search-current", new Highlight(rangeIn(node, cur.start, cur.end)));
+  // A match in a block is shown by scrolling to the block: its frame runs no
+  // script, so nothing highlights in it.
+  if (node.classList.contains("rich")) CSS.highlights.delete("search-current");
+  else CSS.highlights.set("search-current", new Highlight(rangeIn(node, cur.start, cur.end)));
   node.scrollIntoView({ block: "center" });
   // The scroll event comes later: new output must not bring the view back.
   stick = false;

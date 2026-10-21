@@ -8,14 +8,41 @@ use gtk::{gdk, glib};
 use raterm::config::Config;
 use raterm::rich::{Kind, Rendered};
 use webkit2gtk::{
-    LoadEvent, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType, SettingsExt,
-    URIRequestExt, WebContext, WebView, WebViewExt,
+    FindControllerExt, FindOptions, LoadEvent, NavigationPolicyDecisionExt, PolicyDecisionExt,
+    PolicyDecisionType, SettingsExt, URIRequestExt, WebContext, WebView, WebViewExt,
 };
 
 use super::View;
 use super::draw::theme;
 
+/// What WebKit's search does in a block.
+pub(super) enum Find<'a> {
+    Start { query: &'a str, backwards: bool },
+    Next,
+    Previous,
+    Finish,
+}
+
 impl View {
+    /// Searches in the web view of a block, which highlights the matches.
+    pub(super) fn find_in_block(&self, entry: u64, find: Find) {
+        let Some(controller) = self.blocks.get(&entry).and_then(|v| v.find_controller()) else {
+            return;
+        };
+        match find {
+            Find::Start { query, backwards } => {
+                let mut options = FindOptions::CASE_INSENSITIVE | FindOptions::WRAP_AROUND;
+                if backwards {
+                    options |= FindOptions::BACKWARDS;
+                }
+                controller.search(query, options.bits(), u32::MAX);
+            }
+            Find::Next => controller.search_next(),
+            Find::Previous => controller.search_previous(),
+            Find::Finish => controller.search_finish(),
+        }
+    }
+
     /// Clears the selection of the grid and those of the blocks, but the
     /// block `keep`.
     pub(super) fn clear_selections(&mut self, keep: Option<u64>) {
@@ -108,7 +135,24 @@ impl View {
         });
         // The height comes back through the document's title: reading the
         // result of a script would take the javascriptcore crate.
-        view.connect_load_changed(|view, event| {
+        let me = self.me.clone();
+        view.connect_load_changed(move |view, event| {
+            // A block made while it holds the current match searches once
+            // loaded.
+            if event == LoadEvent::Finished
+                && let Some(this) = me.upgrade()
+                && let Ok(this) = this.try_borrow()
+                && let Some(search) = &this.search
+                && search.block == Some(entry)
+            {
+                this.find_in_block(
+                    entry,
+                    Find::Start {
+                        query: &this.search_entry.text(),
+                        backwards: true,
+                    },
+                );
+            }
             if event == LoadEvent::Finished {
                 view.evaluate_javascript(
                     // The body: the document is never smaller than the view.
