@@ -8,14 +8,14 @@ use gtk::{gdk, glib};
 use raterm::config::Config;
 use raterm::rich::{Kind, Rendered};
 use webkit2gtk::{
-    FindControllerExt, FindOptions, LoadEvent, NavigationPolicyDecisionExt, PolicyDecisionExt,
-    PolicyDecisionType, SettingsExt, URIRequestExt, WebContext, WebView, WebViewExt,
+    LoadEvent, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType, SettingsExt,
+    URIRequestExt, WebContext, WebView, WebViewExt,
 };
 
 use super::View;
 use super::draw::theme;
 
-/// What WebKit's search does in a block.
+/// A step of the search in a block.
 pub(super) enum Find<'a> {
     Start { query: &'a str, backwards: bool },
     Next,
@@ -23,38 +23,66 @@ pub(super) enum Find<'a> {
     Finish,
 }
 
+/// Finds the matches in the text of a block (each text node, ignoring case),
+/// as `findAll` in app.js; WebKit's own search left slices of old highlights
+/// on screen.
+const FIND: &str = "window.rtFind = (() => {
+  const needle = QUERY.toLowerCase(), ranges = [];
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); needle && node; node = walker.nextNode()) {
+    const text = node.data.toLowerCase();
+    for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + needle.length)) {
+      const range = document.createRange();
+      range.setStart(node, i);
+      range.setEnd(node, i + needle.length);
+      ranges.push(range);
+    }
+  }
+  return { ranges, i: BACKWARDS ? ranges.length - 1 : 0 };
+})();";
+
+/// Highlights the matches and the current one, and tells where it is through
+/// the title: the flow scrolls to it, the block does not scroll itself. The
+/// time makes each answer a new title.
+const SHOW: &str = "(() => {
+  const f = window.rtFind, n = f ? f.ranges.length : 0;
+  if (!n) {
+    CSS.highlights.clear();
+    return;
+  }
+  f.i = (f.i + n) % n;
+  CSS.highlights.set('rt-search', new Highlight(...f.ranges));
+  const current = new Highlight(f.ranges[f.i]);
+  current.priority = 1;
+  CSS.highlights.set('rt-search-current', current);
+  document.title = 'f:' + Math.round(f.ranges[f.i].getBoundingClientRect().top) + ':' + Date.now();
+})();";
+
+/// WebKit repaints the text a highlight left, not all of its line: slices
+/// of it stayed on screen. Switching the opacity of the document repaints it
+/// all.
+const REPAINT: &str = "(() => {
+  const s = document.documentElement.style;
+  s.opacity = s.opacity ? '' : '0.999';
+})();";
+
 impl View {
     /// Searches in the web view of a block, which highlights the matches.
     pub(super) fn find_in_block(&self, entry: u64, find: Find) {
-        let Some(controller) = self.blocks.get(&entry).and_then(|v| v.find_controller()) else {
+        let Some(view) = self.blocks.get(&entry) else {
             return;
         };
-        match find {
+        let script = match find {
             Find::Start { query, backwards } => {
-                let mut options = FindOptions::CASE_INSENSITIVE | FindOptions::WRAP_AROUND;
-                if backwards {
-                    options |= FindOptions::BACKWARDS;
-                }
-                controller.search(query, options.bits(), u32::MAX);
+                FIND.replace("QUERY", &serde_json::to_string(query).unwrap())
+                    .replace("BACKWARDS", &backwards.to_string())
+                    + SHOW
             }
-            Find::Next => controller.search_next(),
-            Find::Previous => controller.search_previous(),
-            Find::Finish => return controller.search_finish(),
-        }
-        // Where the match WebKit selected is, to scroll the flow to it: the
-        // block does not scroll itself. The script reaches the web process
-        // after the search; the time makes each answer a new title.
-        if let Some(view) = self.blocks.get(&entry) {
-            view.evaluate_javascript(
-                "document.title = 'f:' + (getSelection().rangeCount \
-                 ? Math.round(getSelection().getRangeAt(0).getBoundingClientRect().top) : -1) \
-                 + ':' + Date.now()",
-                None,
-                None,
-                None::<&gtk::gio::Cancellable>,
-                |_| {},
-            );
-        }
+            Find::Next => format!("window.rtFind && window.rtFind.i++; {SHOW}"),
+            Find::Previous => format!("window.rtFind && window.rtFind.i--; {SHOW}"),
+            Find::Finish => "window.rtFind = null; CSS.highlights.clear();".to_owned(),
+        } + REPAINT;
+        view.evaluate_javascript(&script, None, None, None::<&gtk::gio::Cancellable>, |_| {});
     }
 
     /// Clears the selection of the grid and those of the blocks, but the
@@ -243,6 +271,8 @@ img {{ max-width: 100%; }}
 body.md > * {{ max-width: {text_width}; margin-left: auto; margin-right: auto; }}
 body.md > table {{ max-width: none; margin: 8px auto; }}
 * {{ -webkit-user-drag: none; }}
+::highlight(rt-search) {{ background-color: var(--c3); color: var(--bg); }}
+::highlight(rt-search-current) {{ background-color: var(--c9); color: var(--bg); }}
 ::selection {{ background: rgba({sel_r}, {sel_g}, {sel_b}, 0.99); color: #{sel_text:06x}; }}
 "#,
         fg = t.fg,
