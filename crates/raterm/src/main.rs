@@ -22,9 +22,9 @@ struct Args {
         value_name = "COMMAND"
     )]
     command: Vec<String>,
-    /// Draw the text natively instead of in the web view (prototype of M6a).
+    /// Draw everything in the web view, as before the native view (M6).
     #[arg(long)]
-    native: bool,
+    web: bool,
 }
 
 fn main() -> Result<(), raterm::pty::Error> {
@@ -41,9 +41,9 @@ fn main() -> Result<(), raterm::pty::Error> {
     } else {
         args.command
     };
-    if args.native {
-        native::run(config, &command, args.title)
-    } else {
+    if args.web {
         view::run(config, &command, args.title)
+    } else {
+        native::run(config, &command, args.title)
     }
 }

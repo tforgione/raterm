@@ -220,12 +220,14 @@ pub fn open_url(url: &str) {
     }
 }
 
-/// Opens another raterm window, in the same directory as this one's shell.
+/// Opens another raterm window, in the web view too, in the same directory
+/// as this one's shell.
 fn new_window(cwd: Option<std::path::PathBuf>) {
     let mut command = match std::env::current_exe() {
         Ok(exe) => std::process::Command::new(exe),
         Err(e) => return eprintln!("raterm: cannot find own executable: {e}"),
     };
+    command.arg("--web");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }

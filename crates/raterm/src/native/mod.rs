@@ -931,13 +931,12 @@ impl View {
     }
 }
 
-/// Opens another native window, in the same directory as this one's shell.
+/// Opens another window, in the same directory as this one's shell.
 fn new_window(cwd: Option<std::path::PathBuf>) {
     let mut command = match std::env::current_exe() {
         Ok(exe) => std::process::Command::new(exe),
         Err(e) => return eprintln!("raterm: cannot find own executable: {e}"),
     };
-    command.arg("--native");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
