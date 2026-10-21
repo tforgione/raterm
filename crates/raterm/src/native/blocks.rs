@@ -189,7 +189,7 @@ body.md > table {{ max-width: none; margin: 8px auto; }}
 }
 
 /// A CSS font-family from configured names, quoted (`fontFamily` in app.js).
-fn css_fonts(names: &str, fallback: &str) -> String {
+pub(super) fn css_fonts(names: &str, fallback: &str) -> String {
     const GENERIC: [&str; 6] = [
         "serif",
         "sans-serif",

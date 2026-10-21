@@ -5,6 +5,7 @@
 mod blocks;
 mod draw;
 mod keys;
+mod search;
 mod select;
 
 use std::cell::RefCell;
@@ -31,6 +32,7 @@ use webkit2gtk::{WebContext, WebView, WebViewExt};
 use blocks::block_style;
 use draw::{cells, measure};
 use keys::encode;
+use search::Search;
 use select::{Pos, Selection, Unit};
 
 enum UserEvent {
@@ -85,6 +87,9 @@ struct View {
     /// selection of its own.
     block_selected: Option<u64>,
     keys: BTreeMap<String, Binding>,
+    /// Open while the search bar is.
+    search: Option<Search>,
+    search_entry: gtk::Entry,
 }
 
 /// Asks the event loop for a redraw, once until it is done.
@@ -125,6 +130,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     overlay.add_overlay(&fixed);
     // Input goes to the grid, except over the web views of blocks.
     overlay.set_overlay_pass_through(&fixed, true);
+    let search_entry = search_bar(&config);
+    overlay.add_overlay(&search_entry);
     let vbox = window.default_vbox().ok_or("no GTK container")?;
     vbox.pack_start(&overlay, true, true, 0);
     overlay.show_all();
@@ -158,6 +165,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         selection: None,
         block_selected: None,
         keys: keys::bindings(&config),
+        search: None,
+        search_entry: search_entry.clone(),
     }));
     view.borrow_mut().me = Rc::downgrade(&view);
 
@@ -233,6 +242,24 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                     view.area.queue_draw();
                 }
                 view.copy(gdk::SELECTION_PRIMARY);
+            }
+            glib::Propagation::Stop
+        });
+    }
+    {
+        let view = view.clone();
+        search_entry.connect_changed(move |_| view.borrow_mut().search_step(true, true));
+    }
+    {
+        let view = view.clone();
+        search_entry.connect_key_press_event(move |_, ev| {
+            use gdk::keys::constants as k;
+            let shift = ev.state().contains(gdk::ModifierType::SHIFT_MASK);
+            match ev.keyval() {
+                k::Escape => view.borrow_mut().close_search(),
+                // Enter goes to older matches, Shift+Enter to newer ones.
+                k::Return | k::KP_Enter => view.borrow_mut().search_step(false, !shift),
+                _ => return glib::Propagation::Proceed,
             }
             glib::Propagation::Stop
         });
@@ -371,6 +398,84 @@ impl View {
         })
     }
 
+    /// Rows a block takes: its measured height, or a guess until then.
+    fn block_rows(&self, n: u64) -> usize {
+        self.heights
+            .borrow()
+            .get(&n)
+            .map_or(BLOCK_ROWS, |h| (h / self.cell.1).ceil().max(1.0) as usize)
+    }
+
+    /// Rows of the flow below line `at`: how far to scroll up to see it.
+    fn rows_below(&self, term: &Terminal, at: u64) -> usize {
+        let cols = self.size.0.max(1) as usize;
+        let screen = term.screen();
+        let used = screen
+            .iter()
+            .rposition(|l| !l.runs.is_empty())
+            .map_or(1, |y| y + 1);
+        let history = &term.history;
+        if at >= history.next() {
+            return used.saturating_sub((at - history.next()) as usize + 1);
+        }
+        let mut rows = used;
+        for n in at + 1..history.next() {
+            rows += match history.get(n) {
+                Some(Entry::Line(line)) => line
+                    .runs
+                    .iter()
+                    .map(cells)
+                    .sum::<usize>()
+                    .max(1)
+                    .div_ceil(cols),
+                Some(Entry::Block(_)) => self.block_rows(n),
+                None => 0,
+            };
+        }
+        rows
+    }
+
+    fn open_search(&mut self) {
+        self.search.get_or_insert_default();
+        self.search_entry.show();
+        // Selects the last query, to type a new one over it.
+        self.search_entry.grab_focus();
+    }
+
+    fn close_search(&mut self) {
+        self.search = None;
+        self.search_entry.hide();
+        self.area.grab_focus();
+        self.area.queue_draw();
+    }
+
+    /// Goes to the next match, older or newer, or from the end for a new
+    /// query; the view scrolls to put it in the middle.
+    fn search_step(&mut self, restart: bool, backwards: bool) {
+        let query = self.search_entry.text().to_string();
+        let Some(search) = &mut self.search else {
+            return;
+        };
+        if restart {
+            search.set_query(&query);
+        }
+        let from = search.current.map(|(at, start, _)| (at, start));
+        let event = self.session.read(|t| t.search(&query, from, backwards));
+        let found = search.found(event);
+        let style = self.search_entry.style_context();
+        if found || query.is_empty() {
+            style.remove_class("none");
+        } else {
+            style.add_class("none");
+        }
+        if let Some((at, ..)) = search.current {
+            let rows = self.size.1 as usize;
+            let below = self.session.read(|t| self.rows_below(t, at));
+            self.scroll = below.saturating_sub(rows / 2);
+        }
+        self.layout();
+    }
+
     /// Runs a shortcut's action; false lets the key reach the program.
     fn run_action(&mut self, action: &str) -> bool {
         match action {
@@ -390,8 +495,9 @@ impl View {
                 self.layout();
             }
             "new_window" => new_window(self.session.cwd()),
+            "search" => self.open_search(),
             // Not in the native view yet.
-            "search" | "zoom_in" | "zoom_out" | "zoom_reset" => {}
+            "zoom_in" | "zoom_out" | "zoom_reset" => {}
             _ => return false,
         }
         true
@@ -527,11 +633,7 @@ impl View {
                         }
                     }
                     Some(Entry::Block(_)) => {
-                        let rows = self
-                            .heights
-                            .borrow()
-                            .get(&n)
-                            .map_or(BLOCK_ROWS, |h| (h / self.cell.1).ceil().max(1.0) as usize);
+                        let rows = self.block_rows(n);
                         for row in (0..rows).rev() {
                             out.push(Visual::Block {
                                 entry: n,
@@ -566,4 +668,36 @@ fn new_window(cwd: Option<std::path::PathBuf>) {
         Ok(mut child) => drop(thread::spawn(move || child.wait())),
         Err(e) => eprintln!("raterm: cannot open a new window: {e}"),
     }
+}
+
+/// The search bar, at the top right, in the terminal's colors as in the page.
+fn search_bar(config: &Config) -> gtk::Entry {
+    let entry = gtk::Entry::new();
+    entry.set_halign(gtk::Align::End);
+    entry.set_valign(gtk::Align::Start);
+    entry.set_margin_top(6);
+    entry.set_margin_end(12);
+    entry.set_placeholder_text(Some("Search"));
+    // Hidden until opened, through show_all too.
+    entry.set_no_show_all(true);
+    let t = draw::theme();
+    let css = format!(
+        "entry {{ font: {}pt {}; color: #{:06x}; background: #{:06x}; border: 1px solid #{:06x}; \
+         border-radius: 0; box-shadow: none; padding: 2px 6px; min-height: 0; }} \
+         entry.none {{ border-color: #{:06x}; }}",
+        config.font.size,
+        blocks::css_fonts(&config.font.family, "monospace"),
+        t.fg,
+        t.bg,
+        t.palette[8],
+        t.palette[1],
+    );
+    let provider = gtk::CssProvider::new();
+    if let Err(e) = provider.load_from_data(css.as_bytes()) {
+        eprintln!("raterm: search bar style: {e}");
+    }
+    entry
+        .style_context()
+        .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
+    entry
 }

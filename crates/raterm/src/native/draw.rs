@@ -102,15 +102,23 @@ impl View {
             for (i, visual) in self.visuals(term).iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
-                    let selected = self.selection.and_then(|s| s.cells_of(term, at));
-                    self.draw_line(cr, &style, line, start, y, selected);
+                    let (found, current) = match &self.search {
+                        Some(search) => search.cells(line, at),
+                        None => (Vec::new(), None),
+                    };
+                    let marks = Marks {
+                        selected: self.selection.and_then(|s| s.cells_of(term, at)),
+                        found,
+                        current,
+                    };
+                    self.draw_line(cr, &style, line, start, y, &marks);
                 }
             }
         });
     }
 
     /// Draws cells `start..start + cols` of a line at height `y`, with the
-    /// `selected` cells inverted.
+    /// cells of `marks` in their colors.
     fn draw_line(
         &self,
         cr: &cairo::Context,
@@ -118,10 +126,9 @@ impl View {
         line: &Line,
         start: usize,
         y: f64,
-        selected: Option<(usize, usize)>,
+        marks: &Marks,
     ) {
         let cols = self.size.0 as usize;
-        let is_selected = |x: usize| selected.is_some_and(|(s, e)| x >= s && x < e);
         let mut col = 0;
         for run in &line.runs {
             let n = cells(run);
@@ -142,9 +149,9 @@ impl View {
                 .filter(|&(x, _)| x >= start && x < start + cols)
                 .collect();
             col += n;
-            // Runs of chars all selected or not, drawn in their own colors.
-            for part in chars.chunk_by(|a, b| is_selected(a.0) == is_selected(b.0)) {
-                self.draw_part(cr, style, run, part, start, wide, y, is_selected(part[0].0));
+            // Runs of chars with the same mark, drawn in its colors.
+            for part in chars.chunk_by(|a, b| marks.at(a.0) == marks.at(b.0)) {
+                self.draw_part(cr, style, run, part, start, wide, y, marks.at(part[0].0));
             }
         }
     }
@@ -159,7 +166,7 @@ impl View {
         start: usize,
         wide: usize,
         y: f64,
-        selected: bool,
+        mark: Mark,
     ) {
         let (cw, ch) = self.cell;
         let class = &run.style.class;
@@ -168,8 +175,12 @@ impl View {
         if class.contains("cursor") {
             (fg, bg) = (theme().bg, Some(theme().cursor));
         }
-        if selected {
-            (fg, bg) = (theme().selection_text, Some(theme().selection));
+        // As ::selection and ::highlight(search...) in style.css.
+        match mark {
+            Mark::None => {}
+            Mark::Found => (fg, bg) = (theme().bg, Some(theme().palette[3])),
+            Mark::Current => (fg, bg) = (theme().bg, Some(theme().palette[9])),
+            Mark::Selected => (fg, bg) = (theme().selection_text, Some(theme().selection)),
         }
         let x = PAD_X + (chars[0].0 - start) as f64 * cw;
         if let Some(bg) = bg {
@@ -210,6 +221,36 @@ impl View {
                 layout.set_text(c.encode_utf8(&mut [0; 4]));
                 gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
             }
+        }
+    }
+}
+
+/// The cells of a line drawn in other colors than their own.
+struct Marks {
+    selected: Option<(usize, usize)>,
+    found: Vec<(usize, usize)>,
+    current: Option<(usize, usize)>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Mark {
+    None,
+    Found,
+    Current,
+    Selected,
+}
+
+impl Marks {
+    fn at(&self, x: usize) -> Mark {
+        let has = |r: &(usize, usize)| x >= r.0 && x < r.1;
+        if self.selected.as_ref().is_some_and(has) {
+            Mark::Selected
+        } else if self.current.as_ref().is_some_and(has) {
+            Mark::Current
+        } else if self.found.iter().any(has) {
+            Mark::Found
+        } else {
+            Mark::None
         }
     }
 }

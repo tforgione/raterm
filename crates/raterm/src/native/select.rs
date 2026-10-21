@@ -47,7 +47,7 @@ fn item(term: &Terminal, at: u64) -> Option<Item<'_>> {
 }
 
 /// The chars of a line with the cell each starts at.
-fn chars(line: &Line) -> Vec<(usize, char)> {
+pub(super) fn chars(line: &Line) -> Vec<(usize, char)> {
     let mut out = Vec::new();
     let mut col = 0;
     for run in &line.runs {
