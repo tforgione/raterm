@@ -103,6 +103,7 @@ struct View {
     viewer: Option<WebView>,
     /// `[images] max_height` of the configuration.
     max_image_lines: Option<u16>,
+    media: raterm::media::Server,
     /// Modes of the program, as the core last sent them.
     modes: Arc<Mutex<Modes>>,
     /// The button held down and the last cell reported, while the program
@@ -129,6 +130,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     // First: everything that draws reads it.
     draw::init_theme(&config.colors);
     let (session, reader) = Session::spawn(&config, command, 80, 24)?;
+    // Local videos and audio are streamed to the web views of blocks.
+    let media = raterm::media::serve(session.media())?;
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
@@ -195,6 +198,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         laid_scroll: 0,
         viewer: None,
         max_image_lines: config.images.max_height,
+        media,
         modes: modes.clone(),
         pressed: None,
         last_cell: None,

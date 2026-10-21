@@ -283,7 +283,13 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             if event == LoadEvent::Finished {
                 view.evaluate_javascript(
                     // The body: the document is never smaller than the view.
-                    "document.title = 'h:' + Math.ceil(document.body.getBoundingClientRect().height)",
+                    // Again when it changes, as a video once it knows its size.
+                    "(() => {
+                       const fit = () => document.title =
+                         'h:' + Math.ceil(document.body.getBoundingClientRect().height);
+                       new ResizeObserver(fit).observe(document.body);
+                       fit();
+                     })()",
                     None,
                     None,
                     None::<&gtk::gio::Cancellable>,
@@ -312,10 +318,7 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
                 this.reveal_in_block(entry, top);
             }
         });
-        view.load_html(
-            &document(block, &self.block_style, self.image_style(block)),
-            None,
-        );
+        view.load_html(&self.document(block), None);
         view
     }
 }
@@ -359,6 +362,7 @@ tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.04); }}
 img {{ max-width: 100%; }}
 body.img img, body.svg img {{ display: block; object-fit: contain; object-position: left top; cursor: zoom-in; }}
 body.svg img {{ width: 100%; }}
+video, audio {{ display: block; max-width: 100%; }}
 body.md > * {{ max-width: {text_width}; margin-left: auto; margin-right: auto; }}
 body.md > table {{ max-width: none; margin: 8px auto; }}
 * {{ -webkit-user-drag: none; }}
@@ -405,17 +409,30 @@ pub(super) fn css_fonts(names: &str, fallback: &str) -> String {
         .join(", ")
 }
 
-/// The document of a block, as the page's iframes have it: no network, no
-/// script; `image` is the inline style of an image.
-fn document(block: &Rendered, style: &str, image: String) -> String {
-    let body = match block.kind {
-        Kind::Img | Kind::Svg => format!(r#"<img src="{}" style="{image}">"#, block.content),
-        _ => block.content.clone(),
-    };
-    let kind = format!("{:?}", block.kind).to_lowercase();
-    format!(
-        r#"<!doctype html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
-<style>{style}</style></head><body class="{kind}">{body}</body></html>"#
-    )
+impl View {
+    /// The document of a block, as the page's iframes have it: no network,
+    /// no script, but raterm's own media server for local files.
+    fn document(&self, block: &Rendered) -> String {
+        let size = self.image_style(block);
+        // Local files go through the media server, the rest are data: URLs.
+        let src = match block.content.strip_prefix("media/") {
+            Some(n) => format!("{}{n}", self.media.base),
+            None => block.content.clone(),
+        };
+        let body = match block.kind {
+            Kind::Img | Kind::Svg => format!(r#"<img src="{src}" style="{size}">"#),
+            Kind::Video => {
+                format!(r#"<video controls preload="metadata" src="{src}" style="{size}"></video>"#)
+            }
+            Kind::Audio => format!(r#"<audio controls preload="metadata" src="{src}"></audio>"#),
+            _ => block.content.clone(),
+        };
+        let kind = format!("{:?}", block.kind).to_lowercase();
+        format!(
+            r#"<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; media-src data: {}; style-src 'unsafe-inline'">
+<style>{}</style></head><body class="{kind}">{body}</body></html>"#,
+            self.media.origin, self.block_style
+        )
+    }
 }
