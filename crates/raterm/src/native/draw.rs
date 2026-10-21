@@ -13,6 +13,8 @@ pub(super) struct Theme {
     pub(super) fg: u32,
     pub(super) bg: u32,
     pub(super) cursor: u32,
+    pub(super) selection: u32,
+    pub(super) selection_text: u32,
     pub(super) palette: [u32; 16],
 }
 
@@ -26,6 +28,9 @@ pub(super) fn theme() -> &'static Theme {
             fg: 0xd8dee9,
             bg: 0x151618,
             cursor: 0xd8dee9,
+            // Selected text is shown inverted, as in style.css.
+            selection: 0xd8dee9,
+            selection_text: 0x151618,
             palette: [
                 0x2e3440, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xd8dee9,
                 0x5c6370, 0xf08088, 0xb5e890, 0xf5d58e, 0x82c4ff, 0xda9cf0, 0x7fd4de, 0xffffff,
@@ -47,6 +52,8 @@ pub(super) fn theme() -> &'static Theme {
                 Some("fg") => theme.fg = rgb,
                 Some("bg") => theme.bg = rgb,
                 Some("cursor") => theme.cursor = rgb,
+                Some("selection") => theme.selection = rgb,
+                Some("selection-text") => theme.selection_text = rgb,
                 Some(c) => {
                     if let Some(i) = c.strip_prefix('c').and_then(|i| i.parse::<usize>().ok())
                         && i < 16
@@ -56,6 +63,12 @@ pub(super) fn theme() -> &'static Theme {
                 }
                 None => {}
             }
+        }
+        if !css.contains("--selection:") {
+            theme.selection = theme.fg;
+        }
+        if !css.contains("--selection-text:") {
+            theme.selection_text = theme.bg;
         }
         theme
     })
@@ -155,9 +168,8 @@ impl View {
         if class.contains("cursor") {
             (fg, bg) = (theme().bg, Some(theme().cursor));
         }
-        // Selected text is shown inverted, as in the page.
         if selected {
-            (fg, bg) = (theme().bg, Some(theme().fg));
+            (fg, bg) = (theme().selection_text, Some(theme().selection));
         }
         let x = PAD_X + (chars[0].0 - start) as f64 * cw;
         if let Some(bg) = bg {

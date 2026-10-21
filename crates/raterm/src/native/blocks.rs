@@ -16,6 +16,26 @@ use super::View;
 use super::draw::theme;
 
 impl View {
+    /// Clears the selection of the grid and those of the blocks, but the
+    /// block `keep`.
+    pub(super) fn clear_selections(&mut self, keep: Option<u64>) {
+        if self.selection.take().is_some() {
+            self.area.queue_draw();
+        }
+        self.block_selected = None;
+        for (entry, view) in &self.blocks {
+            if Some(*entry) != keep {
+                view.evaluate_javascript(
+                    "getSelection().removeAllRanges()",
+                    None,
+                    None,
+                    None::<&gtk::gio::Cancellable>,
+                    |_| {},
+                );
+            }
+        }
+    }
+
     /// A web view for a block: its document is the block's content alone,
     /// without scripts nor network, links open in the desktop's handler.
     pub(super) fn block_view(&mut self, entry: u64, block: &Rendered) -> WebView {
@@ -31,6 +51,18 @@ impl View {
         let bg = |shift: u32| ((theme().bg >> shift) & 0xff) as f64 / 255.0;
         view.set_background_color(&gdk::RGBA::new(bg(16), bg(8), bg(0), 1.0));
         view.set_can_focus(false);
+        // One selection at a time: one in a block clears the others.
+        let me = self.me.clone();
+        view.connect_button_press_event(move |_, ev| {
+            if ev.button() == 1
+                && let Some(view) = me.upgrade()
+            {
+                let mut view = view.borrow_mut();
+                view.clear_selections(Some(entry));
+                view.block_selected = Some(entry);
+            }
+            glib::Propagation::Proceed
+        });
         // The wheel scrolls the terminal, over blocks too.
         let me = self.me.clone();
         view.connect_scroll_event(move |_, ev| {
@@ -123,9 +155,15 @@ tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.04); }}
 img {{ max-width: 100%; }}
 body.md > * {{ max-width: {text_width}; margin-left: auto; margin-right: auto; }}
 body.md > table {{ max-width: none; margin: 8px auto; }}
+::selection {{ background: rgba({sel_r}, {sel_g}, {sel_b}, 0.99); color: #{sel_text:06x}; }}
 "#,
         fg = t.fg,
         bg = t.bg,
+        // Not quite opaque: WebKit makes an opaque selection color translucent.
+        sel_r = t.selection >> 16,
+        sel_g = t.selection >> 8 & 0xff,
+        sel_b = t.selection & 0xff,
+        sel_text = t.selection_text,
         size = config.blocks.font_size,
         family = css_fonts(&config.blocks.font_family, "sans-serif"),
         mono = css_fonts(&config.font.family, "monospace"),

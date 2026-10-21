@@ -26,7 +26,7 @@ use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
-use webkit2gtk::{WebContext, WebView};
+use webkit2gtk::{WebContext, WebView, WebViewExt};
 
 use blocks::block_style;
 use draw::{cells, measure};
@@ -81,6 +81,9 @@ struct View {
     me: Weak<RefCell<View>>,
     block_style: String,
     selection: Option<Selection>,
+    /// The block whose web view was clicked last, which may hold a
+    /// selection of its own.
+    block_selected: Option<u64>,
     keys: BTreeMap<String, Binding>,
 }
 
@@ -153,6 +156,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         redraw: redraw.clone(),
         me: Weak::new(),
         selection: None,
+        block_selected: None,
         keys: keys::bindings(&config),
     }));
     view.borrow_mut().me = Rc::downgrade(&view);
@@ -188,6 +192,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                         gdk::EventType::TripleButtonPress => Unit::Line,
                         _ => Unit::Cell,
                     };
+                    view.clear_selections(None);
                     if let Some(pos) = view.pos_at(x, y) {
                         view.selection = Some(Selection {
                             anchor: pos,
@@ -392,9 +397,15 @@ impl View {
         true
     }
 
-    /// Copies the selection to the clipboard or the primary selection.
+    /// Copies the selection to the clipboard or the primary selection; that
+    /// of a block, the web view copies itself.
     fn copy(&self, which: gdk::Atom) {
         let Some(selection) = self.selection else {
+            if which == gdk::SELECTION_CLIPBOARD
+                && let Some(view) = self.block_selected.and_then(|e| self.blocks.get(&e))
+            {
+                view.execute_editing_command("Copy");
+            }
             return;
         };
         let text = self.session.read(|term| selection.text(term));
