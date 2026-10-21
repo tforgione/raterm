@@ -321,7 +321,8 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
 }
 
 /// The stylesheet of blocks, the same as `richStyle` in app.js.
-pub(super) fn block_style(config: &Config, cell_width: f64) -> String {
+/// `scale` is that of the zoom, as in the page.
+pub(super) fn block_style(config: &Config, cell_width: f64, scale: f64) -> String {
     let t = theme();
     let vars: String = (0..16)
         .map(|i| format!("--c{i}: #{:06x}; ", t.palette[i]))
@@ -372,7 +373,7 @@ body.md > table {{ max-width: none; margin: 8px auto; }}
         sel_g = t.selection >> 8 & 0xff,
         sel_b = t.selection & 0xff,
         sel_text = t.selection_text,
-        size = config.blocks.font_size,
+        size = config.blocks.font_size as f64 * scale,
         family = css_fonts(&config.blocks.font_family, "sans-serif"),
         mono = css_fonts(&config.font.family, "monospace"),
     )

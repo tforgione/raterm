@@ -82,6 +82,9 @@ struct View {
     /// This view, for the handlers of the web views it makes.
     me: Weak<RefCell<View>>,
     block_style: String,
+    config: Config,
+    /// Steps of the zoom, each 10% bigger or smaller, as in the page.
+    zoom: i32,
     selection: Option<Selection>,
     /// The block whose web view was clicked last, which may hold a
     /// selection of its own.
@@ -162,7 +165,9 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let cell = measure(&area, &font);
     let view = Rc::new(RefCell::new(View {
         session: session.clone(),
-        block_style: block_style(&config, cell.0),
+        block_style: block_style(&config, cell.0, 1.0),
+        config: config.clone(),
+        zoom: 0,
         cell,
         area: area.clone(),
         fixed,
@@ -413,6 +418,24 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
 }
 
 impl View {
+    /// Changes the size of the font: the cells, the grid, the pty, and the
+    /// blocks, made again at the new size.
+    fn set_zoom(&mut self, zoom: i32) {
+        self.zoom = zoom;
+        let scale = 1.1f64.powi(zoom);
+        self.font
+            .set_size((self.config.font.size as f64 * scale * pango::SCALE as f64) as i32);
+        self.cell = measure(&self.area, &self.font);
+        self.block_style = block_style(&self.config, self.cell.0, scale);
+        for view in self.blocks.values() {
+            unsafe { view.destroy() };
+        }
+        self.blocks.clear();
+        self.heights.borrow_mut().clear();
+        self.resized(&self.area.allocation());
+        self.layout();
+    }
+
     fn resized(&mut self, alloc: &gtk::Allocation) {
         let (cw, ch) = self.cell;
         let cols = ((alloc.width() as f64 - 2.0 * PAD_X) / cw).floor().max(1.0) as u16;
@@ -709,8 +732,9 @@ impl View {
             }
             "new_window" => new_window(self.session.cwd()),
             "search" => self.open_search(),
-            // Not in the native view yet.
-            "zoom_in" | "zoom_out" | "zoom_reset" => {}
+            "zoom_in" => self.set_zoom(self.zoom + 1),
+            "zoom_out" => self.set_zoom(self.zoom - 1),
+            "zoom_reset" => self.set_zoom(0),
             _ => return false,
         }
         true
