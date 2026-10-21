@@ -112,7 +112,7 @@ pub struct Markdown {
 
 impl Default for Markdown {
     fn default() -> Self {
-        Markdown { max_width: 100 }
+        Markdown { max_width: 120 }
     }
 }
 

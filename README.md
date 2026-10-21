@@ -132,7 +132,7 @@ decorations = true
 # max_height = 30         # in lines, for images, SVG and videos; unlimited if unset
 
 [markdown]
-max_width = 100           # width of the centered column of text, in columns; 0: no limit
+max_width = 120           # width of the centered column of text, in columns; 0: no limit
 
 [blocks]                  # text of Markdown and HTML blocks; code uses the terminal font
 font_family = "sans-serif"
