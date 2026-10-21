@@ -53,16 +53,33 @@ impl View {
         view.set_can_focus(false);
         // One selection at a time: one in a block clears the others.
         let me = self.me.clone();
-        view.connect_button_press_event(move |_, ev| {
-            if ev.button() == 1
-                && let Some(view) = me.upgrade()
+        view.connect_button_press_event(move |block, ev| {
+            if ev.button() != 1 {
+                return glib::Propagation::Proceed;
+            }
+            // A click starts a new selection, as in the grid, rather than a
+            // drag of the selected text: the script reaches the web process
+            // before the click does. Shift extends the selection instead.
+            if ev.event_type() == gdk::EventType::ButtonPress
+                && !ev.state().contains(gdk::ModifierType::SHIFT_MASK)
             {
+                block.evaluate_javascript(
+                    "getSelection().removeAllRanges()",
+                    None,
+                    None,
+                    None::<&gtk::gio::Cancellable>,
+                    |_| {},
+                );
+            }
+            if let Some(view) = me.upgrade() {
                 let mut view = view.borrow_mut();
                 view.clear_selections(Some(entry));
                 view.block_selected = Some(entry);
             }
             glib::Propagation::Proceed
         });
+        // Nothing is dragged out of a block (images and links neither).
+        view.connect_drag_begin(|_, context| context.drag_cancel());
         // The wheel scrolls the terminal, over blocks too.
         let me = self.me.clone();
         view.connect_scroll_event(move |_, ev| {
@@ -155,6 +172,7 @@ tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.04); }}
 img {{ max-width: 100%; }}
 body.md > * {{ max-width: {text_width}; margin-left: auto; margin-right: auto; }}
 body.md > table {{ max-width: none; margin: 8px auto; }}
+* {{ -webkit-user-drag: none; }}
 ::selection {{ background: rgba({sel_r}, {sel_g}, {sel_b}, 0.99); color: #{sel_text:06x}; }}
 "#,
         fg = t.fg,
