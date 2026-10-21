@@ -8,8 +8,8 @@ use gtk::{gdk, glib};
 use raterm::config::Config;
 use raterm::rich::{Kind, Rendered};
 use webkit2gtk::{
-    LoadEvent, NavigationPolicyDecisionExt, PolicyDecisionExt, PolicyDecisionType, SettingsExt,
-    URIRequestExt, WebContext, WebView, WebViewExt,
+    LoadEvent, NavigationPolicyDecisionExt, NavigationType, PolicyDecisionExt, PolicyDecisionType,
+    SettingsExt, URIRequestExt, WebContext, WebView, WebViewExt,
 };
 
 use super::View;
@@ -246,14 +246,19 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             if kind != PolicyDecisionType::NavigationAction {
                 return false;
             }
-            let uri = decision
+            let action = decision
                 .downcast_ref::<webkit2gtk::NavigationPolicyDecision>()
-                .and_then(|d| d.navigation_action())
-                .and_then(|a| a.request())
-                .and_then(|r| r.uri());
-            match uri {
+                .and_then(|d| d.navigation_action());
+            let clicked = action
+                .as_ref()
+                .is_some_and(|a| a.navigation_type() == NavigationType::LinkClicked);
+            match action.and_then(|a| a.request()).and_then(|r| r.uri()) {
                 Some(uri) if !uri.starts_with("about:") && !uri.starts_with("data:") => {
-                    crate::view::open_url(&uri);
+                    // Without the iframe sandbox, a block could navigate on
+                    // its own (`<meta http-equiv="refresh">`): only clicks open.
+                    if clicked {
+                        crate::view::open_url(&uri);
+                    }
                     decision.ignore();
                     true
                 }
