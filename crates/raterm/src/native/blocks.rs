@@ -67,6 +67,83 @@ const REPAINT: &str = "(() => {
 })();";
 
 impl View {
+    /// The size of an image block, as in the page: at most `h` lines and
+    /// `[images] max_height`, at most `w` columns.
+    fn image_style(&self, block: &Rendered) -> String {
+        let (cw, ch) = self.cell;
+        let lines = match (block.h, self.max_image_lines) {
+            (Some(h), Some(max)) => Some(h.min(max)),
+            (h, max) => h.or(max),
+        };
+        let mut style = String::new();
+        if let Some(lines) = lines {
+            style += &format!("max-height: {}px;", lines as f64 * ch);
+        }
+        if let Some(w) = block.w {
+            style += &format!("max-width: {}px;", w as f64 * cw);
+        }
+        style
+    }
+
+    /// Shows an image full window over the terminal, until a click or Escape
+    /// (see style.css, #viewer).
+    pub(super) fn open_viewer(&mut self, image: &Rendered) {
+        if self.viewer.is_none() {
+            let context = self.context.get_or_insert_with(WebContext::new);
+            let viewer = WebView::with_context(context);
+            if let Some(settings) = WebViewExt::settings(&viewer) {
+                settings.set_enable_javascript_markup(false);
+            }
+            viewer.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+            viewer.set_can_focus(false);
+            viewer.set_no_show_all(true);
+            let me = self.me.clone();
+            viewer.connect_button_press_event(move |_, _| {
+                if let Some(view) = me.upgrade() {
+                    view.borrow_mut().close_viewer();
+                }
+                glib::Propagation::Stop
+            });
+            viewer.connect_scroll_event(|_, _| glib::Propagation::Stop);
+            self.overlay.add_overlay(&viewer);
+            self.viewer = Some(viewer);
+        }
+        let viewer = self.viewer.as_ref().unwrap();
+        // SVGs have no natural size worth keeping: they fill the window.
+        let size = if image.kind == Kind::Svg {
+            "width: 95%; height: 95%; object-fit: contain;"
+        } else {
+            "max-width: 95%; max-height: 95%;"
+        };
+        viewer.load_html(
+            &format!(
+                r#"<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
+<style>
+html, body {{ margin: 0; height: 100%; overflow: hidden; background: rgba(0, 0, 0, 0.85); }}
+body {{ display: flex; align-items: center; justify-content: center; }}
+img {{ {size} }}
+span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; color: #fff; opacity: 0.8; }}
+</style></head><body><span>×</span><img src="{}"></body></html>"#,
+                image.content
+            ),
+            None,
+        );
+        viewer.show();
+    }
+
+    pub(super) fn close_viewer(&mut self) {
+        if let Some(viewer) = &self.viewer {
+            viewer.hide();
+            viewer.load_html("", None);
+        }
+        self.area.grab_focus();
+    }
+
+    pub(super) fn viewer_open(&self) -> bool {
+        self.viewer.as_ref().is_some_and(|v| v.is_visible())
+    }
+
     /// Searches in the web view of a block, which highlights the matches.
     pub(super) fn find_in_block(&self, entry: u64, find: Find) {
         let Some(view) = self.blocks.get(&entry) else {
@@ -122,9 +199,17 @@ impl View {
         view.set_can_focus(false);
         // One selection at a time: one in a block clears the others.
         let me = self.me.clone();
+        let image = matches!(block.kind, Kind::Img | Kind::Svg).then(|| block.clone());
         view.connect_button_press_event(move |block, ev| {
             if ev.button() != 1 {
                 return glib::Propagation::Proceed;
+            }
+            // A click on an image shows it full window, as in the page.
+            if let Some(image) = &image
+                && let Some(view) = me.upgrade()
+            {
+                view.borrow_mut().open_viewer(image);
+                return glib::Propagation::Stop;
             }
             // A click starts a new selection, as in the grid, rather than a
             // drag of the selected text: the script reaches the web process
@@ -227,7 +312,10 @@ impl View {
                 this.reveal_in_block(entry, top);
             }
         });
-        view.load_html(&document(block, &self.block_style), None);
+        view.load_html(
+            &document(block, &self.block_style, self.image_style(block)),
+            None,
+        );
         view
     }
 }
@@ -268,6 +356,8 @@ th, td {{ border: 1px solid var(--c8); padding: 4px 10px; text-align: left; vert
 th {{ background: rgba(255, 255, 255, 0.08); }}
 tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.04); }}
 img {{ max-width: 100%; }}
+body.img img, body.svg img {{ display: block; object-fit: contain; object-position: left top; cursor: zoom-in; }}
+body.svg img {{ width: 100%; }}
 body.md > * {{ max-width: {text_width}; margin-left: auto; margin-right: auto; }}
 body.md > table {{ max-width: none; margin: 8px auto; }}
 * {{ -webkit-user-drag: none; }}
@@ -315,10 +405,10 @@ pub(super) fn css_fonts(names: &str, fallback: &str) -> String {
 }
 
 /// The document of a block, as the page's iframes have it: no network, no
-/// script.
-fn document(block: &Rendered, style: &str) -> String {
+/// script; `image` is the inline style of an image.
+fn document(block: &Rendered, style: &str, image: String) -> String {
     let body = match block.kind {
-        Kind::Img | Kind::Svg => format!(r#"<img src="{}">"#, block.content),
+        Kind::Img | Kind::Svg => format!(r#"<img src="{}" style="{image}">"#, block.content),
         _ => block.content.clone(),
     };
     let kind = format!("{:?}", block.kind).to_lowercase();

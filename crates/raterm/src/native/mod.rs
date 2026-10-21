@@ -90,6 +90,11 @@ struct View {
     /// Open while the search bar is.
     search: Option<Search>,
     search_entry: gtk::Entry,
+    overlay: gtk::Overlay,
+    /// The image shown full window, made on its first use.
+    viewer: Option<WebView>,
+    /// `[images] max_height` of the configuration.
+    max_image_lines: Option<u16>,
     /// Modes of the program, as the core last sent them.
     modes: Arc<Mutex<Modes>>,
     /// The button held down and the last cell reported, while the program
@@ -175,6 +180,9 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         keys: keys::bindings(&config),
         search: None,
         search_entry: search_entry.clone(),
+        overlay: overlay.clone(),
+        viewer: None,
+        max_image_lines: config.images.max_height,
         modes: modes.clone(),
         pressed: None,
         last_cell: None,
@@ -333,6 +341,13 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let view = view.clone();
         let modes = modes.clone();
         area.connect_key_press_event(move |_, ev| {
+            // Keys belong to the image viewer while it is open.
+            if view.borrow().viewer_open() {
+                if ev.keyval() == gdk::keys::constants::Escape {
+                    view.borrow_mut().close_viewer();
+                }
+                return glib::Propagation::Stop;
+            }
             let binding = view.borrow().keys.get(&keys::name(ev)).cloned();
             match binding {
                 Some(Binding::Send { send }) => {
