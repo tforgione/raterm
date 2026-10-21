@@ -250,8 +250,9 @@ class Window:
             (self.ctl / "startup").touch()
         inner = f"{sys.executable} -I {Path(__file__).resolve()} inner {self.ctl}"
         self.term = term
-        if term == "raterm":
-            cmd = f"env XDG_CONFIG_HOME={scratch}/config {RATERM} --title {self.title} -e {inner}"
+        if term in ("raterm", "raterm-native"):
+            native = " --native" if term == "raterm-native" else ""
+            cmd = f"env XDG_CONFIG_HOME={scratch}/config {RATERM}{native} --title {self.title} -e {inner}"
         elif term == "alacritty":
             cmd = f"alacritty --config-file {scratch}/config/alacritty.toml --title {self.title} -e {inner}"
         elif term == "terminator":
