@@ -1,0 +1,206 @@
+//! The selection of the native view, over the flow: positions are an entry of
+//! the history, or `next + y` for row `y` of the screen (as in
+//! `Terminal::search`), and a cell of that line.
+
+use raterm::history::Entry;
+use raterm::term::{Line, Terminal};
+
+use super::draw::cells;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct Pos {
+    pub(super) at: u64,
+    pub(super) cell: usize,
+}
+
+/// What a drag extends: cells, words (double click) or lines (triple click).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Unit {
+    Cell,
+    Word,
+    Line,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Selection {
+    pub(super) anchor: Pos,
+    pub(super) head: Pos,
+    pub(super) unit: Unit,
+}
+
+/// A line of the flow: an entry of the history or a row of the screen.
+enum Item<'a> {
+    Line(&'a Line),
+    /// The text a block copies as (its Markdown source).
+    Block(Option<&'a str>),
+}
+
+fn item(term: &Terminal, at: u64) -> Option<Item<'_>> {
+    let next = term.history.next();
+    if at >= next {
+        return term.screen().get((at - next) as usize).map(Item::Line);
+    }
+    match term.history.get(at)? {
+        Entry::Line(line) => Some(Item::Line(line)),
+        Entry::Block(block) => Some(Item::Block(block.text.as_deref())),
+    }
+}
+
+/// The chars of a line with the cell each starts at.
+fn chars(line: &Line) -> Vec<(usize, char)> {
+    let mut out = Vec::new();
+    let mut col = 0;
+    for run in &line.runs {
+        let wide = cells(run) / run.text.chars().count().max(1);
+        for c in run.text.chars() {
+            out.push((col, c));
+            col += wide;
+        }
+    }
+    out
+}
+
+/// Separators of words on a double click, as alacritty's `semantic_escape_chars`.
+fn word_char(c: char) -> bool {
+    !c.is_whitespace() && !",│`|:\"'()[]{}<>".contains(c)
+}
+
+impl Selection {
+    /// Start and end, in order, extended to the unit.
+    pub(super) fn bounds(&self, term: &Terminal) -> (Pos, Pos) {
+        let (mut a, mut b) = if self.anchor <= self.head {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        };
+        match self.unit {
+            Unit::Cell => {}
+            Unit::Line => {
+                a.cell = 0;
+                b.cell = usize::MAX;
+            }
+            Unit::Word => {
+                if let Some(Item::Line(line)) = item(term, a.at) {
+                    let cs = chars(line);
+                    let i = cs.iter().rposition(|&(x, _)| x <= a.cell);
+                    if let Some(i) = i.filter(|&i| word_char(cs[i].1)) {
+                        let start = cs[..i].iter().rposition(|&(_, c)| !word_char(c));
+                        a.cell = start.map_or(0, |s| cs[s + 1].0);
+                    }
+                }
+                if let Some(Item::Line(line)) = item(term, b.at) {
+                    let cs = chars(line);
+                    if let Some(i) = cs.iter().rposition(|&(x, _)| x <= b.cell)
+                        && word_char(cs[i].1)
+                    {
+                        let end = cs[i..].iter().position(|&(_, c)| !word_char(c));
+                        b.cell = end.map_or(usize::MAX, |e| cs[i + e].0);
+                    } else {
+                        b.cell += 1;
+                    }
+                }
+            }
+        }
+        (a, b)
+    }
+
+    /// The selected cells of line `at`, as a range.
+    pub(super) fn cells_of(&self, term: &Terminal, at: u64) -> Option<(usize, usize)> {
+        let (a, b) = self.bounds(term);
+        if at < a.at || at > b.at {
+            return None;
+        }
+        let start = if at == a.at { a.cell } else { 0 };
+        let end = if at == b.at { b.cell } else { usize::MAX };
+        (start < end).then_some((start, end))
+    }
+
+    /// The selected text: lines end with a newline, except a soft-wrapped row
+    /// of the screen, which goes on in the next one; trailing blanks go.
+    pub(super) fn text(&self, term: &Terminal) -> String {
+        let (a, b) = self.bounds(term);
+        let mut out = String::new();
+        for at in a.at..=b.at {
+            let Some(item) = item(term, at) else { continue };
+            let wrap = match item {
+                Item::Block(text) => {
+                    out += text.unwrap_or("");
+                    false
+                }
+                Item::Line(line) => {
+                    let (s, e) = self.cells_of(term, at).unwrap_or((0, 0));
+                    let text: String = chars(line)
+                        .into_iter()
+                        .filter(|&(x, _)| x >= s && x < e)
+                        .map(|(_, c)| c)
+                        .collect();
+                    out += text.trim_end();
+                    line.wrap
+                }
+            };
+            if at != b.at && !wrap {
+                out.push('\n');
+            }
+        }
+        out
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.unit == Unit::Cell && self.anchor == self.head
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn select(term: &Terminal, anchor: (u64, usize), head: (u64, usize), unit: Unit) -> String {
+        let pos = |(at, cell)| Pos { at, cell };
+        Selection {
+            anchor: pos(anchor),
+            head: pos(head),
+            unit,
+        }
+        .text(term)
+    }
+
+    #[test]
+    fn selection_goes_from_history_to_screen() {
+        let mut term = Terminal::new(20, 2);
+        term.advance(b"hello world\r\nfoo bar\r\nbaz\r\nqux");
+        // Entries 0 "hello world" and 1 "foo bar"; screen rows 2 "baz", 3 "qux".
+        assert_eq!(select(&term, (0, 6), (1, 3), Unit::Cell), "world\nfoo");
+        assert_eq!(select(&term, (1, 4), (3, 2), Unit::Cell), "bar\nbaz\nqu");
+        // Backwards is the same.
+        assert_eq!(select(&term, (1, 3), (0, 6), Unit::Cell), "world\nfoo");
+    }
+
+    #[test]
+    fn words_and_lines() {
+        let mut term = Terminal::new(30, 2);
+        term.advance(b"ls (/usr/bin) done\r\n$ ");
+        // No history: the line is row 0 of the screen.
+        assert_eq!(select(&term, (0, 6), (0, 6), Unit::Word), "/usr/bin");
+        assert_eq!(select(&term, (0, 0), (0, 0), Unit::Word), "ls");
+        assert_eq!(
+            select(&term, (0, 3), (0, 3), Unit::Line),
+            "ls (/usr/bin) done"
+        );
+    }
+
+    #[test]
+    fn soft_wrapped_rows_copy_as_one_line() {
+        let mut term = Terminal::new(4, 3);
+        term.advance(b"abcdef\r\ngh");
+        assert_eq!(select(&term, (0, 0), (2, 2), Unit::Cell), "abcdef\ngh");
+    }
+
+    #[test]
+    fn blocks_copy_as_their_text() {
+        let mut term = Terminal::new(20, 2);
+        // "IyB0" is base64 for "# t".
+        term.advance(b"a\r\n\x1b]7117;md;IyB0\x07b");
+        let n = term.history.next();
+        assert_eq!(select(&term, (0, 0), (n, 1), Unit::Cell), "a\n# t\nb");
+    }
+}

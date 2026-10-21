@@ -1,7 +1,83 @@
-//! Keys, encoded as terminal sequences like `encode` in app.js.
+//! Keys: shortcuts, and the sequences other keys send, as in app.js.
+
+use std::collections::BTreeMap;
 
 use gtk::gdk;
+use raterm::config::{Binding, Config};
 use raterm::term::Modes;
+
+const MODIFIERS: [&str; 4] = ["ctrl", "alt", "shift", "super"];
+
+/// The default shortcuts, as `DEFAULT_KEYS` in app.js.
+const DEFAULT_KEYS: [(&str, &str); 10] = [
+    ("ctrl+shift+c", "copy"),
+    ("ctrl+shift+v", "paste"),
+    ("shift+insert", "paste_selection"),
+    ("ctrl+shift+f", "search"),
+    ("ctrl+=", "zoom_in"),
+    ("ctrl++", "zoom_in"),
+    ("ctrl+-", "zoom_out"),
+    ("ctrl+0", "zoom_reset"),
+    ("shift+pageup", "scroll_page_up"),
+    ("shift+pagedown", "scroll_page_down"),
+];
+
+/// The shortcuts: the defaults, with those of the configuration over them.
+pub(super) fn bindings(config: &Config) -> BTreeMap<String, Binding> {
+    DEFAULT_KEYS
+        .iter()
+        .map(|&(k, a)| (k.to_owned(), Binding::Action(a.into())))
+        .chain(config.keys.clone())
+        .map(|(k, b)| (normalize(&k), b))
+        .collect()
+}
+
+/// Canonical form of a shortcut such as "Shift+Ctrl+C": "ctrl+shift+c".
+fn normalize(spec: &str) -> String {
+    let spec = spec.to_lowercase();
+    let mut parts: Vec<&str> = spec.split('+').collect();
+    let mut key = parts.pop().unwrap_or("").to_owned();
+    if key.is_empty() {
+        parts.pop();
+        key = "+".into();
+    }
+    let mut out: Vec<String> = MODIFIERS
+        .iter()
+        .filter(|m| parts.contains(m))
+        .map(|m| m.to_string())
+        .collect();
+    out.push(key);
+    out.join("+")
+}
+
+/// The shortcut a key event is, in the form of `normalize`.
+pub(super) fn name(ev: &gdk::EventKey) -> String {
+    let state = ev.state();
+    let mods = [
+        state.contains(gdk::ModifierType::CONTROL_MASK),
+        state.contains(gdk::ModifierType::MOD1_MASK),
+        state.contains(gdk::ModifierType::SHIFT_MASK),
+        state.contains(gdk::ModifierType::SUPER_MASK),
+    ];
+    let key = match ev.keyval().to_unicode() {
+        Some(' ') => "space".to_owned(),
+        Some(c) if !c.is_control() => c.to_lowercase().to_string(),
+        // Names as the page's key names: Page_Up is "pageup".
+        _ => ev
+            .keyval()
+            .name()
+            .map(|n| n.to_lowercase().replace('_', ""))
+            .unwrap_or_default(),
+    };
+    let mut out: Vec<&str> = MODIFIERS
+        .iter()
+        .zip(mods)
+        .filter(|&(_, on)| on)
+        .map(|(m, _)| *m)
+        .collect();
+    out.push(&key);
+    normalize(&out.join("+"))
+}
 
 /// The sequence a key sends, the same as `encode` in app.js; `None` for text,
 /// which goes through the input method.

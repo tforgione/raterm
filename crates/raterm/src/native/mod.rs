@@ -5,9 +5,10 @@
 mod blocks;
 mod draw;
 mod keys;
+mod select;
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,7 +16,7 @@ use std::thread;
 
 use gtk::prelude::*;
 use gtk::{gdk, glib, pango};
-use raterm::config::Config;
+use raterm::config::{Binding, Config};
 use raterm::history::Entry;
 use raterm::pty::Error;
 use raterm::rich::Rendered;
@@ -30,6 +31,7 @@ use webkit2gtk::{WebContext, WebView};
 use blocks::block_style;
 use draw::{cells, measure};
 use keys::encode;
+use select::{Pos, Selection, Unit};
 
 enum UserEvent {
     /// New output: lay the flow out again and draw it at the next frame.
@@ -44,45 +46,52 @@ const PAD_Y: f64 = 2.0;
 const BLOCK_ROWS: usize = 3;
 
 /// One row of the flow, as laid out for drawing.
-pub(super) enum Visual<'a> {
-    /// Cells `start..` of a line, up to the width of the view.
-    Text { line: &'a Line, start: usize },
+enum Visual<'a> {
+    /// Cells `start..` of a line, up to the width of the view; `at` is the
+    /// line's position in the flow (see `select::Pos`).
+    Text {
+        line: &'a Line,
+        start: usize,
+        at: u64,
+    },
     /// Row `row` of a block, `rows` tall.
     Block { entry: u64, row: usize, rows: usize },
 }
 
-pub(super) struct View {
-    pub(super) session: Arc<Session>,
-    pub(super) area: gtk::DrawingArea,
-    pub(super) fixed: gtk::Fixed,
-    pub(super) font: pango::FontDescription,
-    pub(super) cell: (f64, f64),
-    pub(super) size: (u16, u16),
+struct View {
+    session: Arc<Session>,
+    area: gtk::DrawingArea,
+    fixed: gtk::Fixed,
+    font: pango::FontDescription,
+    cell: (f64, f64),
+    size: (u16, u16),
     /// Rows scrolled up from the end of the flow.
-    pub(super) scroll: usize,
+    scroll: usize,
     /// The history's end at the last layout, to keep the view in place when
     /// output comes while scrolled up.
-    pub(super) seen_next: u64,
+    seen_next: u64,
     /// Web views of the blocks in view.
-    pub(super) blocks: HashMap<u64, WebView>,
+    blocks: HashMap<u64, WebView>,
     /// Heights of the blocks measured so far, in pixels; filled by the web
     /// views once loaded, kept when they leave the view.
-    pub(super) heights: Rc<RefCell<HashMap<u64, f64>>>,
-    pub(super) context: Option<WebContext>,
-    pub(super) redraw: Arc<Redraw>,
+    heights: Rc<RefCell<HashMap<u64, f64>>>,
+    context: Option<WebContext>,
+    redraw: Arc<Redraw>,
     /// This view, for the handlers of the web views it makes.
-    pub(super) me: Weak<RefCell<View>>,
-    pub(super) block_style: String,
+    me: Weak<RefCell<View>>,
+    block_style: String,
+    selection: Option<Selection>,
+    keys: BTreeMap<String, Binding>,
 }
 
 /// Asks the event loop for a redraw, once until it is done.
-pub(super) struct Redraw {
+struct Redraw {
     pending: AtomicBool,
     proxy: Mutex<EventLoopProxy<UserEvent>>,
 }
 
 impl Redraw {
-    pub(super) fn request(&self) {
+    fn request(&self) {
         if !self.pending.swap(true, Ordering::AcqRel) {
             let _ = self.proxy.lock().unwrap().send_event(UserEvent::Redraw);
         }
@@ -100,7 +109,13 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
 
     let area = gtk::DrawingArea::new();
     area.set_can_focus(true);
-    area.add_events(gdk::EventMask::SCROLL_MASK | gdk::EventMask::SMOOTH_SCROLL_MASK);
+    area.add_events(
+        gdk::EventMask::SCROLL_MASK
+            | gdk::EventMask::SMOOTH_SCROLL_MASK
+            | gdk::EventMask::BUTTON_PRESS_MASK
+            | gdk::EventMask::BUTTON_RELEASE_MASK
+            | gdk::EventMask::BUTTON1_MOTION_MASK,
+    );
     let fixed = gtk::Fixed::new();
     let overlay = gtk::Overlay::new();
     overlay.add(&area);
@@ -137,6 +152,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         context: None,
         redraw: redraw.clone(),
         me: Weak::new(),
+        selection: None,
+        keys: keys::bindings(&config),
     }));
     view.borrow_mut().me = Rc::downgrade(&view);
 
@@ -155,6 +172,63 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let view = view.clone();
         area.connect_scroll_event(move |_, ev| {
             view.borrow_mut().wheel(ev);
+            glib::Propagation::Stop
+        });
+    }
+    {
+        let view = view.clone();
+        area.connect_button_press_event(move |area, ev| {
+            area.grab_focus();
+            let (x, y) = ev.position();
+            let mut view = view.borrow_mut();
+            match ev.button() {
+                1 => {
+                    let unit = match ev.event_type() {
+                        gdk::EventType::DoubleButtonPress => Unit::Word,
+                        gdk::EventType::TripleButtonPress => Unit::Line,
+                        _ => Unit::Cell,
+                    };
+                    if let Some(pos) = view.pos_at(x, y) {
+                        view.selection = Some(Selection {
+                            anchor: pos,
+                            head: pos,
+                            unit,
+                        });
+                        view.area.queue_draw();
+                    }
+                }
+                2 => view.paste(gdk::SELECTION_PRIMARY),
+                _ => {}
+            }
+            glib::Propagation::Stop
+        });
+    }
+    {
+        let view = view.clone();
+        area.connect_motion_notify_event(move |_, ev| {
+            let (x, y) = ev.position();
+            let mut view = view.borrow_mut();
+            if let Some(pos) = view.pos_at(x, y)
+                && let Some(selection) = &mut view.selection
+                && selection.head != pos
+            {
+                selection.head = pos;
+                view.area.queue_draw();
+            }
+            glib::Propagation::Stop
+        });
+    }
+    {
+        let view = view.clone();
+        area.connect_button_release_event(move |_, ev| {
+            if ev.button() == 1 {
+                let mut view = view.borrow_mut();
+                if view.selection.is_some_and(|s| s.is_empty()) {
+                    view.selection = None;
+                    view.area.queue_draw();
+                }
+                view.copy(gdk::SELECTION_PRIMARY);
+            }
             glib::Propagation::Stop
         });
     }
@@ -183,22 +257,17 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let view = view.clone();
         let modes = modes.clone();
         area.connect_key_press_event(move |_, ev| {
-            let mods = ev.state();
-            if mods.contains(gdk::ModifierType::SHIFT_MASK)
-                && matches!(
-                    ev.keyval(),
-                    gdk::keys::constants::Page_Up | gdk::keys::constants::Page_Down
-                )
-            {
-                let mut view = view.borrow_mut();
-                let page = view.size.1 as usize * 9 / 10;
-                view.scroll = if ev.keyval() == gdk::keys::constants::Page_Up {
-                    view.scroll + page
-                } else {
-                    view.scroll.saturating_sub(page)
-                };
-                view.layout();
-                return glib::Propagation::Stop;
+            let binding = view.borrow().keys.get(&keys::name(ev)).cloned();
+            match binding {
+                Some(Binding::Send { send }) => {
+                    view.borrow_mut().scroll_to_end();
+                    session.input(send.as_bytes());
+                    return glib::Propagation::Stop;
+                }
+                Some(Binding::Action(action)) if view.borrow_mut().run_action(&action) => {
+                    return glib::Propagation::Stop;
+                }
+                _ => {}
             }
             if let Some(data) = encode(ev, &modes.lock().unwrap()) {
                 view.borrow_mut().scroll_to_end();
@@ -266,7 +335,7 @@ impl View {
         }
     }
 
-    pub(super) fn wheel(&mut self, ev: &gdk::EventScroll) {
+    fn wheel(&mut self, ev: &gdk::EventScroll) {
         let dy = match ev.direction() {
             gdk::ScrollDirection::Up => -1.0,
             gdk::ScrollDirection::Down => 1.0,
@@ -274,6 +343,71 @@ impl View {
         };
         self.scroll = (self.scroll as f64 - 3.0 * dy).max(0.0) as usize;
         self.layout();
+    }
+
+    /// The position in the flow at a point of the view: the nearest boundary
+    /// between cells, or the start of a block.
+    fn pos_at(&self, x: f64, y: f64) -> Option<Pos> {
+        let (cw, ch) = self.cell;
+        self.session.read(|term| {
+            let visuals = self.visuals(term);
+            let row =
+                (((y - PAD_Y) / ch).floor().max(0.0) as usize).min(visuals.len().checked_sub(1)?);
+            Some(match visuals[row] {
+                Visual::Text { start, at, .. } => {
+                    let col = ((x - PAD_X) / cw).round().clamp(0.0, self.size.0 as f64) as usize;
+                    Pos {
+                        at,
+                        cell: start + col,
+                    }
+                }
+                Visual::Block { entry, .. } => Pos { at: entry, cell: 0 },
+            })
+        })
+    }
+
+    /// Runs a shortcut's action; false lets the key reach the program.
+    fn run_action(&mut self, action: &str) -> bool {
+        match action {
+            "copy" => self.copy(gdk::SELECTION_CLIPBOARD),
+            "paste" => self.paste(gdk::SELECTION_CLIPBOARD),
+            "paste_selection" => self.paste(gdk::SELECTION_PRIMARY),
+            "scroll_page_up" | "scroll_page_down" => {
+                if self.session.read(|t| t.alt_screen()) {
+                    return false;
+                }
+                let page = self.size.1 as usize * 9 / 10;
+                self.scroll = if action == "scroll_page_up" {
+                    self.scroll + page
+                } else {
+                    self.scroll.saturating_sub(page)
+                };
+                self.layout();
+            }
+            "new_window" => new_window(self.session.cwd()),
+            // Not in the native view yet.
+            "search" | "zoom_in" | "zoom_out" | "zoom_reset" => {}
+            _ => return false,
+        }
+        true
+    }
+
+    /// Copies the selection to the clipboard or the primary selection.
+    fn copy(&self, which: gdk::Atom) {
+        let Some(selection) = self.selection else {
+            return;
+        };
+        let text = self.session.read(|term| selection.text(term));
+        gtk::Clipboard::get(&which).set_text(&text);
+    }
+
+    fn paste(&self, which: gdk::Atom) {
+        let session = self.session.clone();
+        gtk::Clipboard::get(&which).request_text(move |_, text| {
+            if let Some(text) = text {
+                session.paste(text);
+            }
+        });
     }
 
     fn scroll_to_end(&mut self) {
@@ -292,6 +426,14 @@ impl View {
             let next = term.history.next();
             if self.scroll > 0 {
                 self.scroll += (next - self.seen_next) as usize;
+            }
+            // Positions of the screen are its rows: they move when output
+            // scrolls it, the selection of history entries stays.
+            if next != self.seen_next
+                && let Some(selection) = self.selection
+                && selection.anchor.at.max(selection.head.at) >= self.seen_next
+            {
+                self.selection = None;
             }
             self.seen_next = next;
             let mut y = PAD_Y;
@@ -348,8 +490,13 @@ impl View {
         };
         let mut out: Vec<Visual> = Vec::new();
         let want = rows + self.scroll;
-        for line in screen[..used].iter().rev() {
-            out.push(Visual::Text { line, start: 0 });
+        let next = term.history.next();
+        for (y, line) in screen[..used].iter().enumerate().rev() {
+            out.push(Visual::Text {
+                line,
+                start: 0,
+                at: next + y as u64,
+            });
         }
         if !term.alt_screen() {
             let history = &term.history;
@@ -364,6 +511,7 @@ impl View {
                             out.push(Visual::Text {
                                 line,
                                 start: i * cols,
+                                at: n,
                             });
                         }
                     }
@@ -390,5 +538,21 @@ impl View {
         let mut shown: Vec<Visual> = out.drain(scroll..end).collect();
         shown.reverse();
         shown
+    }
+}
+
+/// Opens another native window, in the same directory as this one's shell.
+fn new_window(cwd: Option<std::path::PathBuf>) {
+    let mut command = match std::env::current_exe() {
+        Ok(exe) => std::process::Command::new(exe),
+        Err(e) => return eprintln!("raterm: cannot find own executable: {e}"),
+    };
+    command.arg("--native");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    match command.spawn() {
+        Ok(mut child) => drop(thread::spawn(move || child.wait())),
+        Err(e) => eprintln!("raterm: cannot open a new window: {e}"),
     }
 }

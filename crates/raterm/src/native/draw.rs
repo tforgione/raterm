@@ -88,14 +88,16 @@ impl View {
         self.session.read(|term| {
             for (i, visual) in self.visuals(term).iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.cell.1;
-                if let Visual::Text { line, start } = visual {
-                    self.draw_line(cr, &style, line, *start, y);
+                if let Visual::Text { line, start, at } = *visual {
+                    let selected = self.selection.and_then(|s| s.cells_of(term, at));
+                    self.draw_line(cr, &style, line, start, y, selected);
                 }
             }
         });
     }
 
-    /// Draws cells `start..start + cols` of a line at height `y`.
+    /// Draws cells `start..start + cols` of a line at height `y`, with the
+    /// `selected` cells inverted.
     fn draw_line(
         &self,
         cr: &cairo::Context,
@@ -103,9 +105,10 @@ impl View {
         line: &Line,
         start: usize,
         y: f64,
+        selected: Option<(usize, usize)>,
     ) {
-        let (cw, ch) = self.cell;
         let cols = self.size.0 as usize;
+        let is_selected = |x: usize| selected.is_some_and(|(s, e)| x >= s && x < e);
         let mut col = 0;
         for run in &line.runs {
             let n = cells(run);
@@ -116,14 +119,7 @@ impl View {
             if col >= start + cols {
                 break;
             }
-            let class = &run.style.class;
-            let cursor = class.contains("cursor");
-            let mut fg = color(run.style.fg.as_deref()).unwrap_or(theme().fg);
-            let mut bg = color(run.style.bg.as_deref());
-            if cursor {
-                (fg, bg) = (theme().bg, Some(theme().cursor));
-            }
-            let wide = if class.contains("wide") { 2 } else { 1 };
+            let wide = n / run.text.chars().count().max(1);
             // The chars of the run in this row, with their cell.
             let chars: Vec<(usize, char)> = run
                 .text
@@ -133,48 +129,74 @@ impl View {
                 .filter(|&(x, _)| x >= start && x < start + cols)
                 .collect();
             col += n;
-            let Some(&(first, _)) = chars.first() else {
-                continue;
-            };
-            let x = PAD_X + (first - start) as f64 * cw;
-            if let Some(bg) = bg {
-                set_color(cr, bg, 1.0);
-                cr.rectangle(x, y, chars.len() as f64 * wide as f64 * cw, ch);
-                let _ = cr.fill();
+            // Runs of chars all selected or not, drawn in their own colors.
+            for part in chars.chunk_by(|a, b| is_selected(a.0) == is_selected(b.0)) {
+                self.draw_part(cr, style, run, part, start, wide, y, is_selected(part[0].0));
             }
-            if class.split(' ').any(|c| c == "h") {
-                continue;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_part(
+        &self,
+        cr: &cairo::Context,
+        style: &gtk::StyleContext,
+        run: &Run,
+        chars: &[(usize, char)],
+        start: usize,
+        wide: usize,
+        y: f64,
+        selected: bool,
+    ) {
+        let (cw, ch) = self.cell;
+        let class = &run.style.class;
+        let mut fg = color(run.style.fg.as_deref()).unwrap_or(theme().fg);
+        let mut bg = color(run.style.bg.as_deref());
+        if class.contains("cursor") {
+            (fg, bg) = (theme().bg, Some(theme().cursor));
+        }
+        // Selected text is shown inverted, as in the page.
+        if selected {
+            (fg, bg) = (theme().bg, Some(theme().fg));
+        }
+        let x = PAD_X + (chars[0].0 - start) as f64 * cw;
+        if let Some(bg) = bg {
+            set_color(cr, bg, 1.0);
+            cr.rectangle(x, y, (chars.len() * wide) as f64 * cw, ch);
+            let _ = cr.fill();
+        }
+        if class.split(' ').any(|c| c == "h") {
+            return;
+        }
+        let attrs = pango::AttrList::new();
+        attrs.insert(pango::AttrColor::new_foreground(
+            ((fg >> 16) as u16) * 257,
+            ((fg >> 8 & 0xff) as u16) * 257,
+            ((fg & 0xff) as u16) * 257,
+        ));
+        for c in class.split(' ') {
+            match c {
+                "b" => attrs.insert(pango::AttrInt::new_weight(pango::Weight::Bold)),
+                "i" => attrs.insert(pango::AttrInt::new_style(pango::Style::Italic)),
+                "u" => attrs.insert(pango::AttrInt::new_underline(pango::Underline::Single)),
+                "s" => attrs.insert(pango::AttrInt::new_strikethrough(true)),
+                "d" => attrs.insert(pango::AttrInt::new_foreground_alpha(0x9999)),
+                _ => {}
             }
-            let attrs = pango::AttrList::new();
-            attrs.insert(pango::AttrColor::new_foreground(
-                ((fg >> 16) as u16) * 257,
-                ((fg >> 8 & 0xff) as u16) * 257,
-                ((fg & 0xff) as u16) * 257,
-            ));
-            for c in class.split(' ') {
-                match c {
-                    "b" => attrs.insert(pango::AttrInt::new_weight(pango::Weight::Bold)),
-                    "i" => attrs.insert(pango::AttrInt::new_style(pango::Style::Italic)),
-                    "u" => attrs.insert(pango::AttrInt::new_underline(pango::Underline::Single)),
-                    "s" => attrs.insert(pango::AttrInt::new_strikethrough(true)),
-                    "d" => attrs.insert(pango::AttrInt::new_foreground_alpha(0x9999)),
-                    _ => {}
-                }
-            }
-            let layout = self.area.create_pango_layout(None);
-            layout.set_font_description(Some(&self.font));
-            layout.set_attributes(Some(&attrs));
-            if run.text.is_ascii() {
-                let text: String = chars.iter().map(|&(_, c)| c).collect();
-                layout.set_text(&text);
-                gtk::render_layout(style, cr, x, y, &layout);
-            } else {
-                // Glyphs of fallback fonts have other widths: each goes to
-                // its own cell, so that the rest of the line stays on the grid.
-                for &(cell, c) in &chars {
-                    layout.set_text(c.encode_utf8(&mut [0; 4]));
-                    gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
-                }
+        }
+        let layout = self.area.create_pango_layout(None);
+        layout.set_font_description(Some(&self.font));
+        layout.set_attributes(Some(&attrs));
+        if chars.iter().all(|&(_, c)| c.is_ascii()) {
+            let text: String = chars.iter().map(|&(_, c)| c).collect();
+            layout.set_text(&text);
+            gtk::render_layout(style, cr, x, y, &layout);
+        } else {
+            // Glyphs of fallback fonts have other widths: each goes to its own
+            // cell, so that the rest of the line stays on the grid.
+            for &(cell, c) in chars {
+                layout.set_text(c.encode_utf8(&mut [0; 4]));
+                gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
             }
         }
     }
