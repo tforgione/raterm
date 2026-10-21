@@ -139,7 +139,9 @@ impl View {
 
     /// A thin rounded bar at the right edge, where the view is in the flow:
     /// fully shown while scrolling, then fading. The flow counts a row per
-    /// entry of the history, as the page's spacers: exact for most lines.
+    /// entry of the history, as the page's spacers, and blocks for the rows
+    /// they were measured to take: exact for most lines, cheap with a long
+    /// history, as blocks are few.
     fn draw_indicator(&self, cr: &cairo::Context, term: &Terminal) {
         let Some(at) = self.scrolled_at.get() else {
             return;
@@ -158,7 +160,15 @@ impl View {
             .iter()
             .rposition(|l| !l.runs.is_empty())
             .map_or(1, |y| y + 1);
-        let total = (term.history.next() - term.history.first()) as f64 + used as f64;
+        let first = term.history.first();
+        let blocks: usize = self
+            .heights
+            .borrow()
+            .keys()
+            .filter(|&&n| n >= first)
+            .map(|&n| self.block_rows(n) - 1)
+            .sum();
+        let total = (term.history.next() - first) as f64 + (used + blocks) as f64;
         if alpha <= 0.0 || term.alt_screen() || total <= rows {
             return;
         }
