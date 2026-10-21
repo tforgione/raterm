@@ -90,6 +90,12 @@ struct View {
     /// Open while the search bar is.
     search: Option<Search>,
     search_entry: gtk::Entry,
+    /// Modes of the program, as the core last sent them.
+    modes: Arc<Mutex<Modes>>,
+    /// The button held down and the last cell reported, while the program
+    /// gets the mouse.
+    pressed: Option<u8>,
+    last_cell: Option<(usize, usize)>,
 }
 
 /// Asks the event loop for a redraw, once until it is done.
@@ -122,7 +128,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             | gdk::EventMask::SMOOTH_SCROLL_MASK
             | gdk::EventMask::BUTTON_PRESS_MASK
             | gdk::EventMask::BUTTON_RELEASE_MASK
-            | gdk::EventMask::BUTTON1_MOTION_MASK,
+            | gdk::EventMask::POINTER_MOTION_MASK,
     );
     let fixed = gtk::Fixed::new();
     let overlay = gtk::Overlay::new();
@@ -167,6 +173,9 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         keys: keys::bindings(&config),
         search: None,
         search_entry: search_entry.clone(),
+        modes: modes.clone(),
+        pressed: None,
+        last_cell: None,
     }));
     view.borrow_mut().me = Rc::downgrade(&view);
 
@@ -194,6 +203,26 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             area.grab_focus();
             let (x, y) = ev.position();
             let mut view = view.borrow_mut();
+            let ctrl = ev.state().contains(gdk::ModifierType::CONTROL_MASK);
+            if ev.button() == 1
+                && ctrl
+                && let Some(url) = view.link_at(x, y)
+            {
+                crate::view::open_url(&url);
+                return glib::Propagation::Stop;
+            }
+            if let Some(cell) = view.reported_cell(ev.state(), x, y)
+                && (1..=3).contains(&ev.button())
+            {
+                // The program gets the click: no selection.
+                if ev.event_type() == gdk::EventType::ButtonPress {
+                    let button = ev.button() as u8 - 1;
+                    view.pressed = Some(button);
+                    view.last_cell = Some(cell);
+                    view.send_mouse(button, ev.state(), cell, false);
+                }
+                return glib::Propagation::Stop;
+            }
             match ev.button() {
                 1 => {
                     let unit = match ev.event_type() {
@@ -222,6 +251,12 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         area.connect_motion_notify_event(move |_, ev| {
             let (x, y) = ev.position();
             let mut view = view.borrow_mut();
+            if view.report_motion(ev.state(), x, y) {
+                return glib::Propagation::Stop;
+            }
+            if !ev.state().contains(gdk::ModifierType::BUTTON1_MASK) {
+                return glib::Propagation::Proceed;
+            }
             if let Some(pos) = view.pos_at(x, y)
                 && let Some(selection) = &mut view.selection
                 && selection.head != pos
@@ -235,8 +270,15 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     {
         let view = view.clone();
         area.connect_button_release_event(move |_, ev| {
+            let mut view = view.borrow_mut();
+            if let Some(button) = view.pressed.take() {
+                let (x, y) = ev.position();
+                if let Some(cell) = view.screen_cell(x, y).or(view.last_cell) {
+                    view.send_mouse(button, ev.state(), cell, true);
+                }
+                return glib::Propagation::Stop;
+            }
             if ev.button() == 1 {
-                let mut view = view.borrow_mut();
                 if view.selection.is_some_and(|s| s.is_empty()) {
                     view.selection = None;
                     view.area.queue_draw();
@@ -373,6 +415,24 @@ impl View {
             gdk::ScrollDirection::Down => 1.0,
             _ => ev.delta().1,
         };
+        if dy == 0.0 {
+            return;
+        }
+        let (x, y) = ev.position();
+        if let Some(cell) = self.reported_cell(ev.state(), x, y) {
+            return self.send_mouse(if dy < 0.0 { 64 } else { 65 }, ev.state(), cell, false);
+        }
+        let modes = *self.modes.lock().unwrap();
+        if self.session.read(|t| t.alt_screen())
+            && modes.alt_scroll
+            && !ev.state().contains(gdk::ModifierType::SHIFT_MASK)
+        {
+            // Full-screen programs without mouse reporting (less, man)
+            // scroll with arrow keys.
+            let arrow = if modes.app_cursor { "\x1bO" } else { "\x1b[" };
+            let key = format!("{arrow}{}", if dy < 0.0 { "A" } else { "B" });
+            return self.session.input(key.repeat(3).as_bytes());
+        }
         self.scroll = (self.scroll as f64 - 3.0 * dy).max(0.0) as usize;
         self.layout();
     }
@@ -395,6 +455,90 @@ impl View {
                 }
                 Visual::Block { entry, .. } => Pos { at: entry, cell: 0 },
             })
+        })
+    }
+
+    /// The cell of the screen at a point of the view, if any.
+    fn screen_cell(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        let (cw, ch) = self.cell;
+        if x < PAD_X || y < PAD_Y {
+            return None;
+        }
+        let col = ((x - PAD_X) / cw) as usize;
+        let row = ((y - PAD_Y) / ch) as usize;
+        self.session.read(|term| {
+            let next = term.history.next();
+            match self.visuals(term).get(row)? {
+                Visual::Text { at, .. } if *at >= next && col < self.size.0 as usize => {
+                    Some((col, (*at - next) as usize))
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// The cell the program gets a mouse event at, when it asks for them and
+    /// Shift does not keep the mouse for selecting.
+    fn reported_cell(&self, state: gdk::ModifierType, x: f64, y: f64) -> Option<(usize, usize)> {
+        if self.modes.lock().unwrap().mouse == 0 || state.contains(gdk::ModifierType::SHIFT_MASK) {
+            return None;
+        }
+        self.screen_cell(x, y)
+    }
+
+    /// Reports a motion, when the program asks for drags (2) or any motion
+    /// (3); true if it was reported.
+    fn report_motion(&mut self, state: gdk::ModifierType, x: f64, y: f64) -> bool {
+        let mouse = self.modes.lock().unwrap().mouse;
+        if mouse < 2 || (mouse == 2 && self.pressed.is_none()) {
+            return false;
+        }
+        let Some(cell) = self.reported_cell(state, x, y) else {
+            return false;
+        };
+        if self.last_cell != Some(cell) {
+            self.last_cell = Some(cell);
+            self.send_mouse(32 + self.pressed.unwrap_or(3), state, cell, false);
+        }
+        true
+    }
+
+    fn send_mouse(
+        &self,
+        button: u8,
+        state: gdk::ModifierType,
+        cell: (usize, usize),
+        release: bool,
+    ) {
+        let sgr = self.modes.lock().unwrap().sgr_mouse;
+        if let Some(data) = keys::mouse(button, state, cell, release, sgr) {
+            self.session.input(&data);
+        }
+    }
+
+    /// The link of the run at a point of the view (OSC 8 or a URL in the text).
+    fn link_at(&self, x: f64, y: f64) -> Option<String> {
+        let (cw, ch) = self.cell;
+        let row = ((y - PAD_Y) / ch).floor();
+        let col = ((x - PAD_X) / cw).floor();
+        if row < 0.0 || col < 0.0 {
+            return None;
+        }
+        self.session.read(|term| {
+            let visuals = self.visuals(term);
+            let Visual::Text { line, start, .. } = visuals.get(row as usize)? else {
+                return None;
+            };
+            let cell = start + col as usize;
+            let mut x0 = 0;
+            for run in &line.runs {
+                let n = cells(run);
+                if cell < x0 + n {
+                    return run.style.link.clone();
+                }
+                x0 += n;
+            }
+            None
         })
     }
 

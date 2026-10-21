@@ -79,6 +79,32 @@ pub(super) fn name(ev: &gdk::EventKey) -> String {
     normalize(&out.join("+"))
 }
 
+/// xterm's encoding of a mouse event, as `sendMouse` in app.js: `button` is
+/// 0-2 for the buttons, 64-65 for the wheel, plus 32 for motion; `sgr` is
+/// mode 1006, else the legacy encoding.
+pub(super) fn mouse(
+    button: u8,
+    state: gdk::ModifierType,
+    (x, y): (usize, usize),
+    release: bool,
+    sgr: bool,
+) -> Option<Vec<u8>> {
+    let code = button
+        + 4 * state.contains(gdk::ModifierType::SHIFT_MASK) as u8
+        + 8 * state.contains(gdk::ModifierType::MOD1_MASK) as u8
+        + 16 * state.contains(gdk::ModifierType::CONTROL_MASK) as u8;
+    if sgr {
+        let end = if release { 'm' } else { 'M' };
+        return Some(format!("\x1b[<{code};{};{}{end}", x + 1, y + 1).into_bytes());
+    }
+    // The legacy encoding has no release per button, and stops at 223.
+    if x >= 223 || y >= 223 {
+        return None;
+    }
+    let b = if release { (code & !3) | 3 } else { code };
+    Some(vec![0x1b, b'[', b'M', 32 + b, 33 + x as u8, 33 + y as u8])
+}
+
 /// The sequence a key sends, the same as `encode` in app.js; `None` for text,
 /// which goes through the input method.
 pub(super) fn encode(ev: &gdk::EventKey, modes: &Modes) -> Option<String> {
@@ -162,4 +188,37 @@ pub(super) fn encode(ev: &gdk::EventKey, modes: &Modes) -> Option<String> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mouse_events_in_both_encodings() {
+        let none = gdk::ModifierType::empty();
+        assert_eq!(
+            mouse(0, none, (4, 9), false, true).unwrap(),
+            b"\x1b[<0;5;10M"
+        );
+        assert_eq!(
+            mouse(2, none, (4, 9), true, true).unwrap(),
+            b"\x1b[<2;5;10m"
+        );
+        let ctrl = gdk::ModifierType::CONTROL_MASK;
+        assert_eq!(
+            mouse(64, ctrl, (0, 0), false, true).unwrap(),
+            b"\x1b[<80;1;1M"
+        );
+        assert_eq!(mouse(0, none, (4, 9), false, false).unwrap(), b"\x1b[M %*");
+        assert_eq!(mouse(1, none, (4, 9), true, false).unwrap(), b"\x1b[M#%*");
+        assert_eq!(mouse(0, none, (300, 0), false, false), None);
+    }
+
+    #[test]
+    fn shortcut_names_are_canonical() {
+        assert_eq!(normalize("Shift+Ctrl+C"), "ctrl+shift+c");
+        assert_eq!(normalize("ctrl++"), "ctrl++");
+        assert_eq!(normalize("shift+PageUp"), "shift+pageup");
+    }
 }
