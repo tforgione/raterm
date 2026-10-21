@@ -2125,6 +2125,7 @@ dependencies = [
  "serde_json",
  "tao",
  "toml 1.1.8+spec-1.1.0",
+ "webkit2gtk",
  "wry",
 ]
 

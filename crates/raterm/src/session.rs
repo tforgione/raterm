@@ -53,6 +53,11 @@ impl Session {
         self.input(data.as_bytes());
     }
 
+    /// Reads the terminal's state, for a view that draws it itself.
+    pub fn read<R>(&self, f: impl FnOnce(&Terminal) -> R) -> R {
+        f(&self.term.lock().unwrap())
+    }
+
     /// Answers a request of the page about the terminal (the scrollback).
     pub fn query(&self, ask: impl FnOnce(&Terminal) -> Event, emit: impl FnOnce(Vec<Event>)) {
         emit(vec![ask(&self.term.lock().unwrap())]);

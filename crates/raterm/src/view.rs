@@ -205,7 +205,7 @@ fn navigate(url: &str) -> bool {
 }
 
 /// Opens a link in the desktop's handler, never in the webview.
-fn open_url(url: &str) {
+pub fn open_url(url: &str) {
     // Other schemes (file:, custom app handlers) would let terminal output
     // launch arbitrary local handlers on a click.
     if !["http://", "https://", "mailto:"]

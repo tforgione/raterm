@@ -229,6 +229,15 @@ impl Terminal {
         }
     }
 
+    /// The screen as last rendered: the alternate one while it is active.
+    pub fn screen(&self) -> &[Line] {
+        &self.screen
+    }
+
+    pub fn alt_screen(&self) -> bool {
+        self.alt
+    }
+
     /// Entries `from..from + count` of the scrollback.
     pub fn entries(&self, from: u64, count: usize) -> Event {
         Event::Entries {

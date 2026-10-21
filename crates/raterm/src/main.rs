@@ -1,3 +1,4 @@
+mod native;
 mod view;
 
 use clap::Parser;
@@ -21,6 +22,9 @@ struct Args {
         value_name = "COMMAND"
     )]
     command: Vec<String>,
+    /// Draw the text natively instead of in the web view (prototype of M6a).
+    #[arg(long)]
+    native: bool,
 }
 
 fn main() -> Result<(), raterm::pty::Error> {
@@ -37,5 +41,9 @@ fn main() -> Result<(), raterm::pty::Error> {
     } else {
         args.command
     };
-    view::run(config, &command, args.title)
+    if args.native {
+        native::run(config, &command, args.title)
+    } else {
+        view::run(config, &command, args.title)
+    }
 }
