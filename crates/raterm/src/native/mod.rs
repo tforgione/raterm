@@ -790,7 +790,11 @@ impl View {
             // Keep the view where it is when output comes while scrolled up.
             let next = term.history.next();
             if self.scroll > 0 {
-                self.scroll += (next - self.seen_next) as usize;
+                let rows = (next - self.seen_next) as usize;
+                self.scroll += rows;
+                // Output does not show the scroll indicator: only the user's
+                // scrolling does.
+                self.laid_scroll += rows;
             }
             // Positions of the screen are its rows: they move when output
             // scrolls it, the selection of history entries stays.

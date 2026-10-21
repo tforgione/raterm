@@ -307,8 +307,8 @@ impl View {
 }
 
 /// How long the scroll indicator stays, then how long until it starts fading.
-pub(super) const INDICATOR_SHOWN: std::time::Duration = std::time::Duration::from_millis(1200);
-const INDICATOR_SOLID: std::time::Duration = std::time::Duration::from_millis(800);
+pub(super) const INDICATOR_SHOWN: std::time::Duration = std::time::Duration::from_millis(1000);
+const INDICATOR_SOLID: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// The cells of a line drawn in other colors than their own.
 struct Marks {
