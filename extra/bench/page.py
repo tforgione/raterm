@@ -186,6 +186,11 @@ CPU time is about {cpu_ratio:.1f} times the time to display.
 
 {img("latency")}
 
+Whatever the terminal, the output waits for the compositor's next frame, so
+the samples spread over about one frame (17 ms at 60 Hz). raterm hands its
+frame to the compositor about 1.4 ms after the output reaches it, on a
+screen full of code (`extra/bench/trace.py`); the rest is the wait.
+
 {tables("latency")}
 
 ### Startup and memory
