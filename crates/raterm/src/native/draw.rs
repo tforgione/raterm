@@ -61,6 +61,14 @@ fn load(colors: &config::Colors) -> Theme {
     theme
 }
 
+/// `[background] image`, if set and readable.
+pub(super) fn load_image(background: &config::Background) -> Option<gtk::gdk_pixbuf::Pixbuf> {
+    let path = background.image_path()?;
+    gtk::gdk_pixbuf::Pixbuf::from_file(&path)
+        .inspect_err(|e| eprintln!("raterm: background image {}: {e}", path.display()))
+        .ok()
+}
+
 /// Width and height of a cell of the font, in pixels.
 pub(super) fn measure(area: &gtk::DrawingArea, font: &pango::FontDescription) -> (f64, f64) {
     let layout = area.create_pango_layout(Some(&"X".repeat(100)));
@@ -128,9 +136,18 @@ impl View {
     pub(super) fn draw(&self, cr: &cairo::Context) {
         // Replaces what was there: painted over, a translucent background
         // would build up.
-        set_color(cr, theme().bg, self.config.window.opacity());
+        let opacity = self.config.window.opacity();
         cr.set_operator(cairo::Operator::Source);
-        let _ = cr.paint();
+        match self.backdrop() {
+            Some(backdrop) => {
+                let _ = cr.set_source_surface(&backdrop, 0.0, 0.0);
+                let _ = cr.paint_with_alpha(opacity);
+            }
+            None => {
+                set_color(cr, theme().bg, opacity);
+                let _ = cr.paint();
+            }
+        }
         cr.set_operator(cairo::Operator::Over);
         let style = self.area.style_context();
         self.session.read(|term| {
@@ -145,6 +162,49 @@ impl View {
             }
             self.draw_indicator(cr, term);
         });
+    }
+
+    /// The background image fitted to the view, under the background color
+    /// at `tint`: composed again only when the size of the view changes.
+    fn backdrop(&self) -> Option<cairo::ImageSurface> {
+        let image = self.image.as_ref()?;
+        let (w, h) = (self.area.allocated_width(), self.area.allocated_height());
+        let mut kept = self.backdrop.borrow_mut();
+        if let Some(backdrop) = kept.as_ref()
+            && (backdrop.width(), backdrop.height()) == (w, h)
+        {
+            return Some(backdrop.clone());
+        }
+        let backdrop = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
+        let cr = cairo::Context::new(&backdrop).ok()?;
+        set_color(&cr, theme().bg, 1.0);
+        let _ = cr.paint();
+        let (iw, ih) = (image.width() as f64, image.height() as f64);
+        let background = &self.config.background;
+        match background.fit {
+            config::Fit::Tile => {
+                cr.set_source_pixbuf(image, 0.0, 0.0);
+                cr.source().set_extend(cairo::Extend::Repeat);
+            }
+            fit => {
+                let (sx, sy) = (w as f64 / iw, h as f64 / ih);
+                let scale = if fit == config::Fit::Cover {
+                    sx.max(sy)
+                } else {
+                    sx.min(sy)
+                };
+                cr.translate((w as f64 - iw * scale) / 2.0, (h as f64 - ih * scale) / 2.0);
+                cr.scale(scale, scale);
+                cr.set_source_pixbuf(image, 0.0, 0.0);
+            }
+        }
+        let _ = cr.paint();
+        cr.identity_matrix();
+        set_color(&cr, theme().bg, background.tint());
+        let _ = cr.paint();
+        drop(cr);
+        *kept = Some(backdrop.clone());
+        Some(backdrop)
     }
 
     fn marks(&self, term: &Terminal, line: &Line, at: u64) -> Marks {

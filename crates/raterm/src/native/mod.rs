@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use gtk::prelude::*;
-use gtk::{gdk, glib, pango};
+use gtk::{cairo, gdk, gdk_pixbuf, glib, pango};
 use raterm::config::{Binding, Config};
 use raterm::history::Entry;
 use raterm::pty::Error;
@@ -113,6 +113,10 @@ struct View {
     /// how many rows the last frame had.
     rows: RefCell<Vec<Option<draw::Row>>>,
     drawn: Cell<usize>,
+    /// `[background] image`, and the background composed from it for the
+    /// size of the view (see draw.rs).
+    image: Option<gdk_pixbuf::Pixbuf>,
+    backdrop: RefCell<Option<cairo::ImageSurface>>,
     /// The image shown full window, made on its first use.
     viewer: Option<WebView>,
     /// `[images] max_height` of the configuration.
@@ -218,6 +222,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         blink_on: Cell::new(true),
         rows: RefCell::default(),
         drawn: Cell::default(),
+        image: draw::load_image(&config.background),
+        backdrop: RefCell::default(),
         viewer: None,
         max_image_lines: config.images.max_height,
         media,

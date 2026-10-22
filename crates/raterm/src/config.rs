@@ -20,6 +20,7 @@ pub struct Config {
     pub colors: Colors,
     pub cursor: Cursor,
     pub window: Window,
+    pub background: Background,
     pub images: Images,
     pub markdown: Markdown,
     pub blocks: Blocks,
@@ -115,6 +116,51 @@ impl Default for Markdown {
     }
 }
 
+/// An image under the grid, darkened by the background color.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Background {
+    /// Absolute, `~/...`, or relative to the configuration's directory.
+    pub image: Option<String>,
+    pub fit: Fit,
+    /// Opacity of the background color over the image.
+    pub tint: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Fit {
+    /// Fills the window, cropped.
+    Cover,
+    /// Whole, centered on the background color.
+    Contain,
+    Tile,
+}
+
+impl Default for Background {
+    fn default() -> Self {
+        Background {
+            image: None,
+            fit: Fit::Cover,
+            tint: 0.7,
+        }
+    }
+}
+
+impl Background {
+    pub fn image_path(&self) -> Option<PathBuf> {
+        let image = self.image.as_deref()?;
+        Some(match image.strip_prefix("~/") {
+            Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+            None => dir().join(image),
+        })
+    }
+
+    pub fn tint(&self) -> f64 {
+        self.tint.clamp(0.0, 1.0)
+    }
+}
+
 /// Text of Markdown and HTML blocks; their code uses the terminal font.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -157,6 +203,7 @@ impl Default for Config {
             colors: Colors::default(),
             cursor: Cursor::default(),
             window: Window::default(),
+            background: Background::default(),
             images: Images::default(),
             markdown: Markdown::default(),
             blocks: Blocks::default(),
@@ -269,6 +316,21 @@ mod tests {
         let set = blocks("[blocks]\nbackground = \"#2a2d33\"");
         assert_eq!(set.background, Some(Rgb(0x2a2d33)));
         assert!(Config::parse("[blocks]\nbackground = \"red\"").is_err());
+    }
+
+    #[test]
+    fn background_image_paths() {
+        let background = |text| Config::parse(text).unwrap().background;
+        assert_eq!(background("").image_path(), None);
+        let set = background("[background]\nimage = \"/w/a.png\"\nfit = \"tile\"\ntint = 3");
+        assert_eq!(set.image_path(), Some(PathBuf::from("/w/a.png")));
+        assert_eq!((set.fit, set.tint()), (Fit::Tile, 1.0));
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let set = background("[background]\nimage = \"~/w/a.png\"");
+        assert_eq!(set.image_path(), Some(home.join("w/a.png")));
+        assert_eq!((set.fit, set.tint()), (Fit::Cover, 0.7));
+        let set = background("[background]\nimage = \"a.png\"");
+        assert_eq!(set.image_path(), Some(dir().join("a.png")));
     }
 
     #[test]
