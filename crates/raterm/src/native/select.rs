@@ -170,6 +170,7 @@ mod tests {
     fn selection_goes_from_history_to_screen() {
         let mut term = Terminal::new(20, 2);
         term.advance(b"hello world\r\nfoo bar\r\nbaz\r\nqux");
+        term.refresh();
         // Entries 0 "hello world" and 1 "foo bar"; screen rows 2 "baz", 3 "qux".
         assert_eq!(select(&term, (0, 6), (1, 3), Unit::Cell), "world\nfoo");
         assert_eq!(select(&term, (1, 4), (3, 2), Unit::Cell), "bar\nbaz\nqu");
@@ -181,6 +182,7 @@ mod tests {
     fn words_and_lines() {
         let mut term = Terminal::new(30, 2);
         term.advance(b"ls (/usr/bin) done\r\n$ ");
+        term.refresh();
         // No history: the line is row 0 of the screen.
         assert_eq!(select(&term, (0, 6), (0, 6), Unit::Word), "/usr/bin");
         assert_eq!(select(&term, (0, 0), (0, 0), Unit::Word), "ls");
@@ -194,6 +196,7 @@ mod tests {
     fn soft_wrapped_rows_copy_as_one_line() {
         let mut term = Terminal::new(4, 3);
         term.advance(b"abcdef\r\ngh");
+        term.refresh();
         assert_eq!(select(&term, (0, 0), (2, 2), Unit::Cell), "abcdef\ngh");
     }
 
@@ -202,6 +205,7 @@ mod tests {
         let mut term = Terminal::new(20, 2);
         // "IyB0" is base64 for "# t".
         term.advance(b"a\r\n\x1b]7117;md;IyB0\x07b");
+        term.refresh();
         let n = term.history.next();
         assert_eq!(select(&term, (0, 0), (n, 1), Unit::Cell), "a\n# t\nb");
     }

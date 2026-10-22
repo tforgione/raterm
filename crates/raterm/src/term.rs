@@ -98,7 +98,8 @@ impl EventListener for Listener {
 /// terminal's state.
 #[derive(Debug, Default)]
 pub struct Update {
-    /// The screen or the scrollback changed: the view has to be drawn again.
+    /// The screen or the scrollback may have changed: the view has to be
+    /// drawn again.
     pub changed: bool,
     /// Window title set by the program (OSC 0/2); empty to reset it.
     pub title: Option<String>,
@@ -123,8 +124,11 @@ pub struct Terminal {
     /// Local files shown by video blocks.
     pub media: Media,
     pub history: History,
-    /// The screen as last rendered.
+    /// The screen as last rendered, and whether output came since: it is
+    /// rendered when the view reads it, once per frame at most, rather than
+    /// after every batch of a flood.
     screen: Vec<Line>,
+    stale: bool,
     alt: bool,
     /// The modes as last reported to the view.
     modes: Modes,
@@ -150,6 +154,7 @@ impl Terminal {
             media: Media::default(),
             history: History::default(),
             screen: Vec::new(),
+            stale: true,
             alt: false,
         }
     }
@@ -161,8 +166,11 @@ impl Terminal {
                 Piece::Bytes(bytes) => {
                     for chunk in bytes.chunks(CHUNK) {
                         self.parser.advance(&mut self.term, chunk);
-                        changed |= self.drain_history();
+                        self.drain_history();
                     }
+                    // Rendering the screen to know whether it changed would
+                    // cost what rendering it lazily saves.
+                    changed = true;
                 }
                 Piece::Block(block) => changed |= self.insert(block),
             }
@@ -173,7 +181,7 @@ impl Terminal {
     pub fn resize(&mut self, cols: u16, rows: u16) -> Update {
         self.term
             .resize(TermSize::new(cols.max(1) as usize, rows.max(1) as usize));
-        self.update(false)
+        self.update(true)
     }
 
     /// Encodes pasted text, honoring bracketed paste mode.
@@ -186,9 +194,30 @@ impl Terminal {
         }
     }
 
-    /// The screen as last rendered: the alternate one while it is active.
+    /// The screen as of the last `refresh` (`Session::read` refreshes it):
+    /// the alternate one while it is active.
     pub fn screen(&self) -> &[Line] {
         &self.screen
+    }
+
+    /// Renders the screen if output came since it was last rendered.
+    pub fn refresh(&mut self) {
+        if !self.stale {
+            return;
+        }
+        self.stale = false;
+        let grid = self.term.grid();
+        let cursor = self
+            .term
+            .mode()
+            .contains(TermMode::SHOW_CURSOR)
+            .then_some(grid.cursor.point);
+        self.screen = (0..grid.screen_lines())
+            .map(|y| {
+                let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
+                self.render(&grid[GridLine(y as i32)], x)
+            })
+            .collect();
     }
 
     pub fn alt_screen(&self) -> bool {
@@ -298,24 +327,21 @@ impl Terminal {
         true
     }
 
-    /// Moves the rows that scrolled out of the main screen to the scrollback;
-    /// false when there were none.
+    /// Moves the rows that scrolled out of the main screen to the scrollback.
     ///
     /// The alternate grid has no history, so this only ever drains the main
     /// screen; lines pushed while the alternate screen is active show up on
     /// exit, which is still the right place in the flow.
-    fn drain_history(&mut self) -> bool {
+    fn drain_history(&mut self) {
         let grid = self.term.grid();
         let rows: Vec<Line> = (1..=grid.history_size() as i32)
             .rev()
             .map(|i| self.render(&grid[GridLine(-i)], None))
             .collect();
         self.term.grid_mut().clear_history();
-        let drained = !rows.is_empty();
         for row in rows {
             self.history.push_row(row);
         }
-        drained
     }
 
     fn update(&mut self, changed: bool) -> Update {
@@ -344,21 +370,8 @@ impl Terminal {
             update.modes = Some(modes);
         }
 
-        update.changed |= self.drain_history();
-        let grid = self.term.grid();
-        let cursor = mode
-            .contains(TermMode::SHOW_CURSOR)
-            .then_some(grid.cursor.point);
-        let screen: Vec<Line> = (0..grid.screen_lines())
-            .map(|y| {
-                let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
-                self.render(&grid[GridLine(y as i32)], x)
-            })
-            .collect();
-        if screen != self.screen {
-            self.screen = screen;
-            update.changed = true;
-        }
+        self.drain_history();
+        self.stale |= update.changed;
         update
     }
 
@@ -599,19 +612,26 @@ mod tests {
     }
 
     #[test]
-    fn only_changes_ask_for_a_redraw() {
+    fn the_screen_is_rendered_when_read() {
         let mut term = Terminal::new(10, 3);
         term.advance(b"one\r\ntwo");
-        assert!(!term.advance(b"\x1b[0m").changed);
+        assert!(!term.advance(b"").changed);
         assert!(term.advance(b"!").changed);
+        assert!(term.screen().is_empty());
+        term.refresh();
         // The trailing space is the cursor cell.
         assert_eq!(term.screen()[1].text(), "two! ");
+        term.advance(b"?");
+        assert_eq!(term.screen()[1].text(), "two! ");
+        term.refresh();
+        assert_eq!(term.screen()[1].text(), "two!? ");
     }
 
     #[test]
     fn colors_and_cursor() {
         let mut term = Terminal::new(10, 1);
         term.advance(b"\x1b[1;31mA\x1b[38;5;196mB\x1b[38;2;1;2;3mC\x1b[0m");
+        term.refresh();
         let styles: Vec<_> = term.screen()[0].runs.iter().map(|r| &r.style).collect();
         assert_eq!(styles[0].fg.as_deref(), Some("var(--c1)"));
         assert_eq!(styles[0].class, "b");
@@ -698,6 +718,7 @@ mod tests {
 
     fn links(term: &mut Terminal, bytes: &[u8]) -> Vec<(String, Option<String>)> {
         term.advance(bytes);
+        term.refresh();
         term.screen()[0]
             .runs
             .iter()
@@ -732,6 +753,7 @@ mod tests {
         let mut term = Terminal::new(10, 1);
         term.bold_is_bright = true;
         term.advance(b"\x1b[1;31mA");
+        term.refresh();
         assert_eq!(
             term.screen()[0].runs[0].style.fg.as_deref(),
             Some("var(--c9)")
@@ -767,6 +789,7 @@ mod tests {
     fn search_goes_through_scrollback_and_screen_and_wraps() {
         let mut term = Terminal::new(10, 2);
         term.advance(b"a x\r\nb\r\nx x\r\n$ ");
+        term.refresh();
         // Entries 0 "a x" and 1 "b"; the screen is "x x" (2), then "$ " (3).
         let last = found(term.search("X", None, true));
         assert_eq!(last, Some((2, 2)));
@@ -793,6 +816,7 @@ mod tests {
 
     fn units(term: &mut Terminal, bytes: &[u8]) -> Vec<(String, u8)> {
         term.advance(bytes);
+        term.refresh();
         term.screen()[0]
             .runs
             .iter()

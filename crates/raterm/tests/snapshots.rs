@@ -13,6 +13,7 @@ fn replay(input: &[u8]) -> String {
     for chunk in input.chunks(256) {
         term.advance(chunk);
     }
+    term.refresh();
     let mut out = term.text() + "--- scrollback\n";
     for n in term.history.first()..term.history.next() {
         out += &serde_json::to_string(term.history.get(n).unwrap()).unwrap();

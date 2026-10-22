@@ -56,7 +56,9 @@ impl Session {
 
     /// Reads the terminal's state, for a view that draws it itself.
     pub fn read<R>(&self, f: impl FnOnce(&Terminal) -> R) -> R {
-        f(&self.term.lock().unwrap())
+        let mut term = self.term.lock().unwrap();
+        term.refresh();
+        f(&term)
     }
 
     pub fn resize(&self, cols: u16, rows: u16, emit: impl FnOnce(Update)) {

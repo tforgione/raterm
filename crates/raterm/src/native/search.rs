@@ -89,6 +89,7 @@ mod tests {
     fn matches_ignore_case_and_know_the_current_one() {
         let mut term = Terminal::new(30, 1);
         term.advance("日 foo Foo".as_bytes());
+        term.refresh();
         let line = &term.screen()[0];
         let mut search = Search::default();
         search.set_query("FOO");
