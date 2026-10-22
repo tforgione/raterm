@@ -126,20 +126,24 @@ impl View {
             for (i, visual) in self.visuals(term).iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
-                    let (found, current) = match &self.search {
-                        Some(search) => search.cells(line, at),
-                        None => (Vec::new(), None),
-                    };
-                    let marks = Marks {
-                        selected: self.selection.and_then(|s| s.cells_of(term, at)),
-                        found,
-                        current,
-                    };
+                    let marks = self.marks(term, line, at);
                     self.draw_line(cr, &style, i, line, start, y, &marks);
                 }
             }
             self.draw_indicator(cr, term);
         });
+    }
+
+    fn marks(&self, term: &Terminal, line: &Line, at: u64) -> Marks {
+        let (found, current) = match &self.search {
+            Some(search) => search.cells(line, at),
+            None => (Vec::new(), None),
+        };
+        Marks {
+            selected: self.selection.and_then(|s| s.cells_of(term, at)),
+            found,
+            current,
+        }
     }
 
     /// A thin rounded bar at the right edge, where the view is in the flow:
@@ -214,13 +218,64 @@ impl View {
     }
 
     /// Draws cells `start..start + cols` of a line at height `y`, row `row`
-    /// of the view, with the cells of `marks` in their colors.
+    /// of the view, with the cells of `marks` in their colors. The image of
+    /// the row is kept, and drawn again as it is while the row stays the
+    /// same: drawing a screen of code took 2.3 ms even with its text shaped.
     #[allow(clippy::too_many_arguments)]
     fn draw_line(
         &self,
         cr: &cairo::Context,
         style: &gtk::StyleContext,
         row: usize,
+        line: &Line,
+        start: usize,
+        y: f64,
+        marks: &Marks,
+    ) {
+        let (cw, ch) = self.cell;
+        let width = self.area.allocated_width();
+        let mut rows = self.rows.borrow_mut();
+        if rows.len() <= row {
+            rows.resize_with(row + 1, || None);
+        }
+        let kept = rows[row]
+            .as_ref()
+            .is_some_and(|r| r.is(line, start, marks, cw, width));
+        // Glyphs of fallback fonts can be taller than a cell: the image has
+        // a transparent margin of a cell above and below, where they spill
+        // over the next rows as when drawn directly.
+        if !kept {
+            let height = (3.0 * ch).ceil() as i32;
+            let Ok(image) = cr
+                .target()
+                .create_similar(cairo::Content::ColorAlpha, width, height)
+            else {
+                return;
+            };
+            let Ok(rc) = cairo::Context::new(&image) else {
+                return;
+            };
+            self.render_line(&rc, style, line, start, ch, marks);
+            rows[row] = Some(Row {
+                line: line.clone(),
+                start,
+                marks: marks.clone(),
+                cell: cw,
+                width,
+                image,
+            });
+        }
+        let image = &rows[row].as_ref().unwrap().image;
+        let _ = cr.set_source_surface(image, 0.0, y - ch);
+        cr.rectangle(0.0, y - ch, width as f64, 3.0 * ch);
+        let _ = cr.fill();
+    }
+
+    /// Draws cells `start..start + cols` of a line at height `y` of `cr`.
+    fn render_line(
+        &self,
+        cr: &cairo::Context,
+        style: &gtk::StyleContext,
         line: &Line,
         start: usize,
         y: f64,
@@ -256,8 +311,7 @@ impl View {
         // A row of the font's own glyphs, a cell each, is shaped as one text,
         // its styles as attributes: shaping each part on its own took 10 ms
         // for a screen of code, and each char on its own 26 ms for one of
-        // French. The layout is kept for the next frames, while the row stays
-        // the same. Glyphs of fallback fonts are drawn cell by cell.
+        // French. Glyphs of fallback fonts are drawn cell by cell.
         let own = |c: char| {
             c.is_ascii()
                 || self
@@ -268,22 +322,8 @@ impl View {
         let whole = parts.iter().all(|(run, chars, _)| {
             run.cluster == 0 && wide(run) == 1 && chars.iter().all(|&(_, c)| c.chars().all(own))
         });
-        let mut shaped = self.shaped.borrow_mut();
-        if shaped.len() <= row {
-            shaped.resize_with(row + 1, || None);
-        }
-        let kept = shaped[row].as_ref().filter(|s| {
-            whole && s.start == start && s.cell == cw && s.marks == *marks && s.line == *line
-        });
-        let layout = match kept {
-            Some(s) => s.layout.clone(),
-            None => {
-                let layout = self.area.create_pango_layout(None);
-                layout.set_font_description(Some(&self.font));
-                layout
-            }
-        };
-        let kept = kept.is_some();
+        let layout = self.area.create_pango_layout(None);
+        layout.set_font_description(Some(&self.font));
         let attrs = pango::AttrList::new();
         let mut text = String::new();
         for (run, chars, mark) in &parts {
@@ -295,9 +335,6 @@ impl View {
                 let _ = cr.fill();
             }
             let hidden = run.style.attrs.has(Attrs::HIDDEN);
-            if kept {
-                continue;
-            }
             if whole {
                 let from = text.len() as u32;
                 for &(_, c) in chars {
@@ -332,34 +369,33 @@ impl View {
                 gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
             }
         }
-        if !whole {
-            shaped[row] = None;
-            return;
-        }
-        if !kept {
+        if whole {
             layout.set_text(&text);
             layout.set_attributes(Some(&attrs));
-            shaped[row] = Some(Shaped {
-                line: line.clone(),
-                start,
-                marks: marks.clone(),
-                cell: cw,
-                layout: layout.clone(),
-            });
+            gtk::render_layout(style, cr, PAD_X + (first - start) as f64 * cw, y, &layout);
         }
-        gtk::render_layout(style, cr, PAD_X + (first - start) as f64 * cw, y, &layout);
     }
 }
 
-/// The layout of a row of the view shaped as one text, and what it was
-/// made from.
-pub(super) struct Shaped {
+/// The image of a row of the view, and what it was drawn from.
+pub(super) struct Row {
     line: Line,
     start: usize,
     marks: Marks,
-    /// The width of a cell: the zoom changes the font.
+    /// The width of a cell (the zoom changes the font), and of the view.
     cell: f64,
-    layout: pango::Layout,
+    width: i32,
+    image: cairo::Surface,
+}
+
+impl Row {
+    fn is(&self, line: &Line, start: usize, marks: &Marks, cell: f64, width: i32) -> bool {
+        self.start == start
+            && self.cell == cell
+            && self.width == width
+            && self.marks == *marks
+            && self.line == *line
+    }
 }
 
 /// The text and background colors of a run, with a mark.
