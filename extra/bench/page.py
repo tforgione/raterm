@@ -82,7 +82,7 @@ tables = lambda anchor: f"Tables: [Performance tables](Performance-tables#{ancho
 page = f"""# Performance
 
 raterm draws its grid with Pango on GTK, and its rich blocks in web views
-(see [Spec-Native-grid](Spec-Native-grid)): the specification accepts that it
+(see [Spec-View](Spec-View)): the specification accepts that it
 will never match a GPU terminal. This page measures by how much, against
 Alacritty, and against two terminals that are not GPU-accelerated, GNOME
 Terminal and Terminator (both on VTE, GNOME's terminal widget), with the

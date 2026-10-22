@@ -20,7 +20,7 @@ messages de commit sont en anglais.
   serveur HTTP local des vidéos et de l'audio), `session`, `config`.
 - `crates/raterm/src/native/` et `main.rs` : le binaire. `native` est la vue
   (grille dessinée par GTK/Pango, blocs en webviews enfantes, voir
-  `Spec-Native-grid`), le seul module qui connaît la fenêtre, GTK et WebKit.
+  `Spec-View`), le seul module qui connaît la fenêtre, GTK et WebKit.
 - `crates/rat/` : le second binaire, sans GTK ni WebKit.
 - `crates/raterm/tests/` : tests snapshot rejouant des sessions enregistrées.
 

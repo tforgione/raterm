@@ -1,4 +1,4 @@
-//! The native view (M6, see Spec-Native-grid in the wiki): the grid is drawn
+//! The view (see Spec-View in the wiki): the grid is drawn
 //! by GTK with Pango straight from the core's state, and rich blocks are
 //! child web views placed in the flow.
 

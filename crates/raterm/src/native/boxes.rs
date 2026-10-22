@@ -1,6 +1,6 @@
 //! Box drawing and block elements (U+2500 to U+259F), drawn to fill their
 //! cell: the glyphs of fonts rarely span the whole height of a cell, and
-//! frames showed gaps between rows (see Spec-Native-grid).
+//! frames showed gaps between rows (see Spec-View).
 
 use gtk::cairo;
 
