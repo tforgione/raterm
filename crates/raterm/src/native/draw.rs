@@ -123,7 +123,9 @@ impl View {
         let _ = cr.paint();
         let style = self.area.style_context();
         self.session.read(|term| {
-            for (i, visual) in self.visuals(term).iter().enumerate() {
+            let visuals = self.visuals(term);
+            self.drawn.set(visuals.len());
+            for (i, visual) in visuals.iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
                     let marks = self.marks(term, line, at);
@@ -144,6 +146,33 @@ impl View {
             found,
             current,
         }
+    }
+
+    /// The rows of the view that would not be drawn as they were, or `None`
+    /// when the whole view has to be (blocks, scroll indicator, another
+    /// number of rows).
+    pub(super) fn changed_rows(&self, term: &Terminal) -> Option<Vec<usize>> {
+        let visuals = self.visuals(term);
+        if visuals.len() != self.drawn.get() || self.scrolled_at.get().is_some() {
+            return None;
+        }
+        let rows = self.rows.borrow();
+        let width = self.area.allocated_width();
+        let mut changed = Vec::new();
+        for (i, visual) in visuals.iter().enumerate() {
+            let Visual::Text { line, start, at } = *visual else {
+                return None;
+            };
+            let marks = self.marks(term, line, at);
+            if !rows
+                .get(i)
+                .and_then(Option::as_ref)
+                .is_some_and(|r| r.is(line, start, &marks, self.cell.0, width))
+            {
+                changed.push(i);
+            }
+        }
+        Some(changed)
     }
 
     /// A thin rounded bar at the right edge, where the view is in the flow:

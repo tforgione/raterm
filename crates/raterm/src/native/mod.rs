@@ -103,8 +103,10 @@ struct View {
     scrolled_at: Rc<Cell<Option<std::time::Instant>>>,
     /// The scroll at the last layout, to see it change.
     laid_scroll: usize,
-    /// The images of the rows of the view, kept from frame to frame.
+    /// The images of the rows of the view, kept from frame to frame, and
+    /// how many rows the last frame had.
     rows: RefCell<Vec<Option<draw::Row>>>,
+    drawn: Cell<usize>,
     /// The image shown full window, made on its first use.
     viewer: Option<WebView>,
     /// `[images] max_height` of the configuration.
@@ -204,6 +206,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         scrolled_at: Rc::default(),
         laid_scroll: 0,
         rows: RefCell::default(),
+        drawn: Cell::default(),
         viewer: None,
         max_image_lines: config.images.max_height,
         media,
@@ -848,7 +851,23 @@ impl View {
             self.laid_scroll = self.scroll;
             self.show_indicator();
         }
-        self.area.queue_draw();
+        // Only the rows that changed, with the margins of their images (see
+        // draw_line): the compositor then takes less of the window.
+        match session.read(|term| self.changed_rows(term)) {
+            Some(rows) => {
+                let (ch, width) = (self.cell.1, self.area.allocated_width());
+                for row in rows {
+                    let y = PAD_Y + (row as f64 - 1.0) * ch;
+                    self.area.queue_draw_area(
+                        0,
+                        y.floor() as i32,
+                        width,
+                        (3.0 * ch).ceil() as i32 + 1,
+                    );
+                }
+            }
+            None => self.area.queue_draw(),
+        }
     }
 
     /// Shows the scroll indicator, and redraws while it fades.
