@@ -272,7 +272,10 @@ impl View {
             cr.rectangle(x, y, (chars.len() * wide) as f64 * cw, ch);
             let _ = cr.fill();
         }
-        if class.split(' ').any(|c| c == "h") {
+        // Blanks have nothing more to draw: full-screen programs paint with
+        // them, and shaping them cost a few ms per frame.
+        let lined = class.split(' ').any(|c| c == "u" || c == "s");
+        if class.split(' ').any(|c| c == "h") || !lined && chars.iter().all(|&(_, c)| c == " ") {
             return;
         }
         let attrs = pango::AttrList::new();
