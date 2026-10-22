@@ -101,6 +101,8 @@ struct View {
     scrolled_at: Rc<Cell<Option<std::time::Instant>>>,
     /// The scroll at the last layout, to see it change.
     laid_scroll: usize,
+    /// The layouts of the rows of the view, kept from frame to frame.
+    shaped: RefCell<Vec<Option<draw::Shaped>>>,
     /// The image shown full window, made on its first use.
     viewer: Option<WebView>,
     /// `[images] max_height` of the configuration.
@@ -198,6 +200,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         overlay: overlay.clone(),
         scrolled_at: Rc::default(),
         laid_scroll: 0,
+        shaped: RefCell::default(),
         viewer: None,
         max_image_lines: config.images.max_height,
         media,

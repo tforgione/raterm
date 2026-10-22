@@ -126,7 +126,7 @@ impl View {
                         found,
                         current,
                     };
-                    self.draw_line(cr, &style, line, start, y, &marks);
+                    self.draw_line(cr, &style, i, line, start, y, &marks);
                 }
             }
             self.draw_indicator(cr, term);
@@ -204,18 +204,23 @@ impl View {
         let _ = cr.fill();
     }
 
-    /// Draws cells `start..start + cols` of a line at height `y`, with the
-    /// cells of `marks` in their colors.
+    /// Draws cells `start..start + cols` of a line at height `y`, row `row`
+    /// of the view, with the cells of `marks` in their colors.
+    #[allow(clippy::too_many_arguments)]
     fn draw_line(
         &self,
         cr: &cairo::Context,
         style: &gtk::StyleContext,
+        row: usize,
         line: &Line,
         start: usize,
         y: f64,
         marks: &Marks,
     ) {
+        let (cw, ch) = self.cell;
         let cols = self.size.0 as usize;
+        // Parts of the row: cells of the same run with the same mark.
+        let mut parts = Vec::new();
         let mut col = 0;
         for run in &line.runs {
             let n = cells(run);
@@ -226,97 +231,155 @@ impl View {
             if col >= start + cols {
                 break;
             }
-            let wide = wide(run);
-            // The cells of the run in this row, with what each holds.
             let chars: Vec<(usize, &str)> = units(run)
                 .into_iter()
                 .map(|(x, text)| (col + x, text))
                 .filter(|&(x, _)| x >= start && x < start + cols)
                 .collect();
             col += n;
-            // Runs of chars with the same mark, drawn in its colors.
             for part in chars.chunk_by(|a, b| marks.at(a.0) == marks.at(b.0)) {
-                self.draw_part(cr, style, run, part, start, wide, y, marks.at(part[0].0));
+                parts.push((run, part.to_vec(), marks.at(part[0].0)));
             }
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn draw_part(
-        &self,
-        cr: &cairo::Context,
-        style: &gtk::StyleContext,
-        run: &Run,
-        chars: &[(usize, &str)],
-        start: usize,
-        wide: usize,
-        y: f64,
-        mark: Mark,
-    ) {
-        let (cw, ch) = self.cell;
-        let class = &run.style.class;
-        let mut fg = color(run.style.fg.as_deref()).unwrap_or(theme().fg);
-        let mut bg = color(run.style.bg.as_deref());
-        if class.contains("cursor") {
-            (fg, bg) = (theme().bg, Some(theme().cursor));
-        }
-        match mark {
-            Mark::None => {}
-            Mark::Found => (fg, bg) = (theme().bg, Some(theme().palette[3])),
-            Mark::Current => (fg, bg) = (theme().bg, Some(theme().palette[9])),
-            Mark::Selected => (fg, bg) = (theme().selection_text, Some(theme().selection)),
-        }
-        let x = PAD_X + (chars[0].0 - start) as f64 * cw;
-        if let Some(bg) = bg {
-            set_color(cr, bg, 1.0);
-            cr.rectangle(x, y, (chars.len() * wide) as f64 * cw, ch);
-            let _ = cr.fill();
-        }
-        // Blanks have nothing more to draw: full-screen programs paint with
-        // them, and shaping them cost a few ms per frame.
-        let lined = class.split(' ').any(|c| c == "u" || c == "s");
-        if class.split(' ').any(|c| c == "h") || !lined && chars.iter().all(|&(_, c)| c == " ") {
+        let Some(first) = parts.first().map(|(_, chars, _)| chars[0].0) else {
             return;
+        };
+        // A row of ASCII is shaped as one text, its styles as attributes:
+        // shaping each part on its own took 10 ms for a screen of code. The
+        // layout is kept for the next frames, while the row stays the same.
+        let ascii = parts
+            .iter()
+            .all(|(_, chars, _)| chars.iter().all(|&(_, c)| c.is_ascii()));
+        let mut shaped = self.shaped.borrow_mut();
+        if shaped.len() <= row {
+            shaped.resize_with(row + 1, || None);
         }
+        let kept = shaped[row].as_ref().filter(|s| {
+            ascii && s.start == start && s.cell == cw && s.marks == *marks && s.line == *line
+        });
+        let layout = match kept {
+            Some(s) => s.layout.clone(),
+            None => {
+                let layout = self.area.create_pango_layout(None);
+                layout.set_font_description(Some(&self.font));
+                layout
+            }
+        };
+        let kept = kept.is_some();
         let attrs = pango::AttrList::new();
-        attrs.insert(pango::AttrColor::new_foreground(
-            ((fg >> 16) as u16) * 257,
-            ((fg >> 8 & 0xff) as u16) * 257,
-            ((fg & 0xff) as u16) * 257,
-        ));
-        for c in class.split(' ') {
-            match c {
-                "b" => attrs.insert(pango::AttrInt::new_weight(pango::Weight::Bold)),
-                "i" => attrs.insert(pango::AttrInt::new_style(pango::Style::Italic)),
-                "u" => attrs.insert(pango::AttrInt::new_underline(pango::Underline::Single)),
-                "s" => attrs.insert(pango::AttrInt::new_strikethrough(true)),
-                "d" => attrs.insert(pango::AttrInt::new_foreground_alpha(0x9999)),
-                _ => {}
+        let mut text = String::new();
+        for (run, chars, mark) in &parts {
+            let (fg, bg) = colors(run, *mark);
+            let x = PAD_X + (chars[0].0 - start) as f64 * cw;
+            if let Some(bg) = bg {
+                set_color(cr, bg, 1.0);
+                cr.rectangle(x, y, (chars.len() * wide(run)) as f64 * cw, ch);
+                let _ = cr.fill();
+            }
+            let hidden = run.style.class.split(' ').any(|c| c == "h");
+            if kept {
+                continue;
+            }
+            if ascii {
+                let from = text.len() as u32;
+                for &(_, c) in chars {
+                    text.push_str(if hidden { " " } else { c });
+                }
+                text_attrs(&attrs, fg, &run.style.class, from..text.len() as u32);
+                continue;
+            }
+            // Blanks have nothing more to draw: full-screen programs paint
+            // with them.
+            let lined = run.style.class.split(' ').any(|c| c == "u" || c == "s");
+            if hidden || !lined && chars.iter().all(|&(_, c)| c == " ") {
+                continue;
+            }
+            let attrs = pango::AttrList::new();
+            text_attrs(&attrs, fg, &run.style.class, 0..u32::MAX);
+            layout.set_attributes(Some(&attrs));
+            // Glyphs of fallback fonts have other widths: each cell is drawn
+            // at its place, so that the rest of the line stays on the grid.
+            // Two regional indicators make a flag: drawn as one glyph from
+            // the first cell.
+            let mut i = 0;
+            while i < chars.len() {
+                let (cell, first) = chars[i];
+                let mut text = first.to_owned();
+                i += 1;
+                if regional(&text) && i < chars.len() && regional(chars[i].1) {
+                    text += chars[i].1;
+                    i += 1;
+                }
+                layout.set_text(&text);
+                gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
             }
         }
-        let layout = self.area.create_pango_layout(None);
-        layout.set_font_description(Some(&self.font));
-        layout.set_attributes(Some(&attrs));
-        if chars.iter().all(|&(_, c)| c.is_ascii()) {
-            let text: String = chars.iter().map(|&(_, c)| c).collect();
-            layout.set_text(&text);
-            gtk::render_layout(style, cr, x, y, &layout);
+        if !ascii {
+            shaped[row] = None;
             return;
         }
-        // Glyphs of fallback fonts have other widths: each cell is drawn at its
-        // place, so that the rest of the line stays on the grid. Two regional
-        // indicators make a flag: drawn as one glyph from the first cell.
-        let mut i = 0;
-        while i < chars.len() {
-            let (cell, first) = chars[i];
-            let mut text = first.to_owned();
-            i += 1;
-            if regional(&text) && i < chars.len() && regional(chars[i].1) {
-                text += chars[i].1;
-                i += 1;
-            }
+        if !kept {
             layout.set_text(&text);
-            gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
+            layout.set_attributes(Some(&attrs));
+            shaped[row] = Some(Shaped {
+                line: line.clone(),
+                start,
+                marks: marks.clone(),
+                cell: cw,
+                layout: layout.clone(),
+            });
+        }
+        gtk::render_layout(style, cr, PAD_X + (first - start) as f64 * cw, y, &layout);
+    }
+}
+
+/// The layout of an ASCII row of the view, and what it was made from.
+pub(super) struct Shaped {
+    line: Line,
+    start: usize,
+    marks: Marks,
+    /// The width of a cell: the zoom changes the font.
+    cell: f64,
+    layout: pango::Layout,
+}
+
+/// The text and background colors of a run, with a mark.
+fn colors(run: &Run, mark: Mark) -> (u32, Option<u32>) {
+    let mut fg = color(run.style.fg.as_deref()).unwrap_or(theme().fg);
+    let mut bg = color(run.style.bg.as_deref());
+    if run.style.class.contains("cursor") {
+        (fg, bg) = (theme().bg, Some(theme().cursor));
+    }
+    match mark {
+        Mark::None => {}
+        Mark::Found => (fg, bg) = (theme().bg, Some(theme().palette[3])),
+        Mark::Current => (fg, bg) = (theme().bg, Some(theme().palette[9])),
+        Mark::Selected => (fg, bg) = (theme().selection_text, Some(theme().selection)),
+    }
+    (fg, bg)
+}
+
+/// Adds the attributes of a run's style to bytes `range` of a layout's text.
+fn text_attrs(attrs: &pango::AttrList, fg: u32, class: &str, range: std::ops::Range<u32>) {
+    let add = |mut attr: pango::Attribute| {
+        attr.set_start_index(range.start);
+        attr.set_end_index(range.end);
+        attrs.insert(attr);
+    };
+    add(pango::AttrColor::new_foreground(
+        ((fg >> 16) as u16) * 257,
+        ((fg >> 8 & 0xff) as u16) * 257,
+        ((fg & 0xff) as u16) * 257,
+    )
+    .into());
+    for c in class.split(' ') {
+        match c {
+            "b" => add(pango::AttrInt::new_weight(pango::Weight::Bold).into()),
+            "i" => add(pango::AttrInt::new_style(pango::Style::Italic).into()),
+            "u" => add(pango::AttrInt::new_underline(pango::Underline::Single).into()),
+            "s" => add(pango::AttrInt::new_strikethrough(true).into()),
+            "d" => add(pango::AttrInt::new_foreground_alpha(0x9999).into()),
+            _ => {}
         }
     }
 }
@@ -326,6 +389,7 @@ pub(super) const INDICATOR_SHOWN: std::time::Duration = std::time::Duration::fro
 const INDICATOR_SOLID: std::time::Duration = std::time::Duration::from_millis(600);
 
 /// The cells of a line drawn in other colors than their own.
+#[derive(Clone, PartialEq)]
 struct Marks {
     selected: Option<(usize, usize)>,
     found: Vec<(usize, usize)>,
