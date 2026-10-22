@@ -83,7 +83,7 @@ struct View {
     me: Weak<RefCell<View>>,
     block_style: String,
     config: Config,
-    /// Steps of the zoom, each 10% bigger or smaller, as in the page.
+    /// Steps of the zoom, each 10% bigger or smaller.
     zoom: i32,
     selection: Option<Selection>,
     /// The block whose web view was clicked last, which may hold a
@@ -234,7 +234,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 && ctrl
                 && let Some(url) = view.link_at(x, y)
             {
-                crate::view::open_url(&url);
+                open_url(&url);
                 return glib::Propagation::Stop;
             }
             if let Some(cell) = view.reported_cell(ev.state(), x, y)
@@ -872,7 +872,7 @@ impl View {
     fn visuals<'a>(&self, term: &'a Terminal) -> Vec<Visual<'a>> {
         let (cols, rows) = (self.size.0.max(1) as usize, self.size.1 as usize);
         let screen = term.screen();
-        // Empty rows below the last used one are not shown, as in the page,
+        // Empty rows below the last used one are not shown,
         // so that output stays right above the prompt.
         let used = if term.alt_screen() {
             screen.len()
@@ -946,7 +946,7 @@ fn new_window(cwd: Option<std::path::PathBuf>) {
     }
 }
 
-/// The search bar, at the top right, in the terminal's colors as in the page.
+/// The search bar, at the top right, in the terminal's colors.
 fn search_bar(config: &Config) -> gtk::Entry {
     let entry = gtk::Entry::new();
     entry.set_halign(gtk::Align::End);
@@ -976,4 +976,20 @@ fn search_bar(config: &Config) -> gtk::Entry {
         .style_context()
         .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     entry
+}
+
+/// Opens a link in the desktop's handler.
+pub(super) fn open_url(url: &str) {
+    // Other schemes (file:, custom app handlers) would let terminal output
+    // launch arbitrary local handlers on a click.
+    if !["http://", "https://", "mailto:"]
+        .iter()
+        .any(|s| url.starts_with(s))
+    {
+        return eprintln!("raterm: refusing to open {url:?}");
+    }
+    match std::process::Command::new("xdg-open").arg(url).spawn() {
+        Ok(mut child) => drop(thread::spawn(move || child.wait())),
+        Err(e) => eprintln!("raterm: xdg-open failed: {e}"),
+    }
 }

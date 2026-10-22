@@ -29,7 +29,7 @@ pub(super) fn theme() -> &'static Theme {
     THEME.get_or_init(|| load(&config::Colors::default()))
 }
 
-/// The default theme of style.css, under the `[colors]` of config.toml.
+/// The default theme, under the `[colors]` of config.toml.
 fn load(colors: &config::Colors) -> Theme {
     let mut theme = Theme {
         fg: 0xd8dee9,
@@ -55,7 +55,7 @@ fn load(colors: &config::Colors) -> Theme {
     {
         theme.palette[i] = c.0;
     }
-    // Selected text is shown inverted, as in style.css, unless set.
+    // Selected text is shown inverted, unless set.
     theme.selection = rgb(colors.selection).unwrap_or(theme.fg);
     theme.selection_text = rgb(colors.selection_text).unwrap_or(theme.bg);
     theme
@@ -135,7 +135,7 @@ impl View {
 
     /// A thin rounded bar at the right edge, where the view is in the flow:
     /// fully shown while scrolling, then fading. The flow counts a row per
-    /// entry of the history, as the page's spacers, and blocks for the rows
+    /// entry of the history, and blocks for the rows
     /// they were measured to take: exact for most lines, cheap with a long
     /// history, as blocks are few.
     fn draw_indicator(&self, cr: &cairo::Context, term: &Terminal) {
@@ -260,7 +260,6 @@ impl View {
         if class.contains("cursor") {
             (fg, bg) = (theme().bg, Some(theme().cursor));
         }
-        // As ::selection and ::highlight(search...) in style.css.
         match mark {
             Mark::None => {}
             Mark::Found => (fg, bg) = (theme().bg, Some(theme().palette[3])),

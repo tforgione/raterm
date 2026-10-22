@@ -1,4 +1,4 @@
-//! Keys: shortcuts, and the sequences other keys send, as in app.js.
+//! Keys: shortcuts, and the sequences other keys send.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use raterm::term::Modes;
 
 const MODIFIERS: [&str; 4] = ["ctrl", "alt", "shift", "super"];
 
-/// The default shortcuts, as `DEFAULT_KEYS` in app.js.
+/// The default shortcuts.
 const DEFAULT_KEYS: [(&str, &str); 10] = [
     ("ctrl+shift+c", "copy"),
     ("ctrl+shift+v", "paste"),
@@ -62,7 +62,7 @@ pub(super) fn name(ev: &gdk::EventKey) -> String {
     let key = match ev.keyval().to_unicode() {
         Some(' ') => "space".to_owned(),
         Some(c) if !c.is_control() => c.to_lowercase().to_string(),
-        // Names as the page's key names: Page_Up is "pageup".
+        // Names as the browser's key names, lowercased: Page_Up is "pageup".
         _ => ev
             .keyval()
             .name()
@@ -79,7 +79,7 @@ pub(super) fn name(ev: &gdk::EventKey) -> String {
     normalize(&out.join("+"))
 }
 
-/// xterm's encoding of a mouse event, as `sendMouse` in app.js: `button` is
+/// xterm's encoding of a mouse event: `button` is
 /// 0-2 for the buttons, 64-65 for the wheel, plus 32 for motion; `sgr` is
 /// mode 1006, else the legacy encoding.
 pub(super) fn mouse(
@@ -105,7 +105,7 @@ pub(super) fn mouse(
     Some(vec![0x1b, b'[', b'M', 32 + b, 33 + x as u8, 33 + y as u8])
 }
 
-/// The sequence a key sends, the same as `encode` in app.js; `None` for text,
+/// The sequence a key sends; `None` for text,
 /// which goes through the input method.
 pub(super) fn encode(ev: &gdk::EventKey, modes: &Modes) -> Option<String> {
     use gdk::keys::constants as k;

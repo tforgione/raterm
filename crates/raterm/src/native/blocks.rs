@@ -1,5 +1,5 @@
 //! Rich blocks as child web views: their document is the block alone,
-//! without scripts nor network, styled like the page's iframes.
+//! without scripts nor network.
 
 use std::rc::Rc;
 
@@ -24,7 +24,7 @@ pub(super) enum Find<'a> {
 }
 
 /// Finds the matches in the text of a block (each text node, ignoring case),
-/// as `findAll` in app.js; WebKit's own search left slices of old highlights
+/// with raterm's own script: WebKit's own search left slices of old highlights
 /// on screen.
 const FIND: &str = "window.rtFind = (() => {
   const needle = QUERY.toLowerCase(), ranges = [];
@@ -67,7 +67,7 @@ const REPAINT: &str = "(() => {
 })();";
 
 impl View {
-    /// The size of an image block, as in the page: at most `h` lines and
+    /// The size of an image block: at most `h` lines and
     /// `[images] max_height`, at most `w` columns.
     fn image_style(&self, block: &Rendered) -> String {
         let (cw, ch) = self.cell;
@@ -85,8 +85,7 @@ impl View {
         style
     }
 
-    /// Shows an image full window over the terminal, until a click or Escape
-    /// (see style.css, #viewer).
+    /// Shows an image full window over the terminal, until a click or Escape.
     pub(super) fn open_viewer(&mut self, image: &Rendered) {
         if self.viewer.is_none() {
             let context = self.context.get_or_insert_with(WebContext::new);
@@ -204,7 +203,6 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             if ev.button() != 1 {
                 return glib::Propagation::Proceed;
             }
-            // A click on an image shows it full window, as in the page.
             if let Some(image) = &image
                 && let Some(view) = me.upgrade()
             {
@@ -257,7 +255,7 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
                     // Without the iframe sandbox, a block could navigate on
                     // its own (`<meta http-equiv="refresh">`): only clicks open.
                     if clicked {
-                        crate::view::open_url(&uri);
+                        super::open_url(&uri);
                     }
                     decision.ignore();
                     true
@@ -328,8 +326,7 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
     }
 }
 
-/// The stylesheet of blocks, the same as `richStyle` in app.js.
-/// `scale` is that of the zoom, as in the page.
+/// The stylesheet of blocks; `scale` is that of the zoom.
 pub(super) fn block_style(config: &Config, cell_width: f64, scale: f64) -> String {
     let t = theme();
     let vars: String = (0..16)
@@ -388,7 +385,8 @@ body.md > table {{ max-width: none; margin: 8px auto; }}
     )
 }
 
-/// A CSS font-family from configured names, quoted (`fontFamily` in app.js).
+/// A CSS font-family from configured names, quoted: unquoted, a name like
+/// `Source Serif 4` is invalid CSS.
 pub(super) fn css_fonts(names: &str, fallback: &str) -> String {
     const GENERIC: [&str; 6] = [
         "serif",
@@ -415,7 +413,7 @@ pub(super) fn css_fonts(names: &str, fallback: &str) -> String {
 }
 
 impl View {
-    /// The document of a block, as the page's iframes have it: no network,
+    /// The document of a block: no network,
     /// no script, but raterm's own media server for local files.
     fn document(&self, block: &Rendered) -> String {
         let size = self.image_style(block);

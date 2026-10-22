@@ -1,5 +1,4 @@
 mod native;
-mod view;
 
 use clap::Parser;
 use raterm::config::Config;
@@ -22,9 +21,6 @@ struct Args {
         value_name = "COMMAND"
     )]
     command: Vec<String>,
-    /// Draw everything in the web view, as before the native view (M6).
-    #[arg(long)]
-    web: bool,
 }
 
 fn main() -> Result<(), raterm::pty::Error> {
@@ -41,9 +37,5 @@ fn main() -> Result<(), raterm::pty::Error> {
     } else {
         args.command
     };
-    if args.web {
-        view::run(config, &command, args.title)
-    } else {
-        native::run(config, &command, args.title)
-    }
+    native::run(config, &command, args.title)
 }

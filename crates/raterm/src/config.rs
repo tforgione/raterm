@@ -42,7 +42,7 @@ pub struct Colors {
     pub bright: Vec<Rgb>,
 }
 
-/// A color written `#rrggbb`: nothing else can reach the page's CSS.
+/// A color written `#rrggbb`: nothing else can reach the CSS of blocks.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rgb(pub u32);
 
