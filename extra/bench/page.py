@@ -90,8 +90,8 @@ script `extra/bench/bench.py`.
 
 ## In short
 
-- **Throughput**: raterm displays a large output {span(gt_ratio, "{:.1f}")} times slower than
-  GNOME Terminal, at {span(speeds("raterm"))} MiB/s against {span(speeds("gnome-terminal"))} MiB/s. The three other
+- **Throughput**: raterm takes {span(gt_ratio, "{:.1f}")} times GNOME Terminal's time to
+  display a large output, at {span(speeds("raterm"))} MiB/s against {span(speeds("gnome-terminal"))} MiB/s. The three other
   terminals are close to the precision of the measure (a few frames), so the
   ratios are lower bounds. Since the first measures, the fixes of the page,
   M5, those of the core and the native grid (M6) made raterm {span(gains)} times faster (see
