@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use gtk::{cairo, pango};
-use raterm::config;
+use raterm::config::{self, CursorStyle};
 use raterm::term::{Attrs, Line, Run, Terminal, Tint};
 
 use super::{PAD_X, PAD_Y, View, Visual};
@@ -141,10 +141,28 @@ impl View {
             Some(search) => search.cells(line, at),
             None => (Vec::new(), None),
         };
+        let has_cursor = line.runs.iter().any(|r| r.style.attrs.has(Attrs::CURSOR));
         Marks {
             selected: self.selection.and_then(|s| s.cells_of(term, at)),
             found,
             current,
+            cursor: has_cursor.then(|| self.cursor_look()),
+        }
+    }
+
+    /// How the cursor looks now: hollow without the focus, as in other
+    /// terminals, and away half of the time when it blinks.
+    pub(super) fn cursor_look(&self) -> Look {
+        if !self.focused.get() {
+            Look::Hollow
+        } else if !self.blink_on.get() {
+            Look::Hidden
+        } else {
+            match self.config.cursor.style {
+                CursorStyle::Block => Look::Block,
+                CursorStyle::Bar => Look::Bar,
+                CursorStyle::Underline => Look::Underline,
+            }
         }
     }
 
@@ -356,7 +374,7 @@ impl View {
         let attrs = pango::AttrList::new();
         let mut text = String::new();
         for (run, chars, mark) in &parts {
-            let (fg, bg) = colors(run, *mark);
+            let (fg, bg) = colors(run, *mark, marks.cursor);
             let x = PAD_X + (chars[0].0 - start) as f64 * cw;
             if let Some(bg) = bg {
                 set_color(cr, bg, 1.0);
@@ -403,6 +421,26 @@ impl View {
             layout.set_attributes(Some(&attrs));
             gtk::render_layout(style, cr, PAD_X + (first - start) as f64 * cw, y, &layout);
         }
+        // A block cursor is drawn by its colors; the others over the text.
+        let cursor = parts
+            .iter()
+            .find(|(run, ..)| run.style.attrs.has(Attrs::CURSOR));
+        if let (Some((run, chars, _)), Some(look)) = (cursor, marks.cursor) {
+            let x = PAD_X + (chars[0].0 - start) as f64 * cw;
+            let w = (chars.len() * wide(run)) as f64 * cw;
+            set_color(cr, theme().cursor, 1.0);
+            match look {
+                Look::Bar => cr.rectangle(x, y, 2.0, ch),
+                Look::Underline => cr.rectangle(x, y + ch - 2.0, w, 2.0),
+                Look::Hollow => {
+                    cr.set_line_width(1.0);
+                    cr.rectangle(x + 0.5, y + 0.5, w - 1.0, ch - 1.0);
+                    let _ = cr.stroke();
+                }
+                Look::Block | Look::Hidden => {}
+            }
+            let _ = cr.fill();
+        }
     }
 }
 
@@ -427,11 +465,12 @@ impl Row {
     }
 }
 
-/// The text and background colors of a run, with a mark.
-fn colors(run: &Run, mark: Mark) -> (u32, Option<u32>) {
+/// The text and background colors of a run, with a mark and the look of the
+/// cursor.
+fn colors(run: &Run, mark: Mark, cursor: Option<Look>) -> (u32, Option<u32>) {
     let mut fg = run.style.fg.map_or(theme().fg, rgb);
     let mut bg = run.style.bg.map(rgb);
-    if run.style.attrs.has(Attrs::CURSOR) {
+    if run.style.attrs.has(Attrs::CURSOR) && cursor == Some(Look::Block) {
         (fg, bg) = (theme().bg, Some(theme().cursor));
     }
     match mark {
@@ -483,6 +522,17 @@ struct Marks {
     selected: Option<(usize, usize)>,
     found: Vec<(usize, usize)>,
     current: Option<(usize, usize)>,
+    /// How the cursor looks, on its line only.
+    cursor: Option<Look>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) enum Look {
+    Block,
+    Bar,
+    Underline,
+    Hollow,
+    Hidden,
 }
 
 #[derive(Clone, Copy, PartialEq)]

@@ -103,6 +103,9 @@ struct View {
     scrolled_at: Rc<Cell<Option<std::time::Instant>>>,
     /// The scroll at the last layout, to see it change.
     laid_scroll: usize,
+    /// Whether the window has the focus, and the blinking cursor is shown.
+    focused: Cell<bool>,
+    blink_on: Cell<bool>,
     /// The images of the rows of the view, kept from frame to frame, and
     /// how many rows the last frame had.
     rows: RefCell<Vec<Option<draw::Row>>>,
@@ -205,6 +208,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         overlay: overlay.clone(),
         scrolled_at: Rc::default(),
         laid_scroll: 0,
+        focused: Cell::new(true),
+        blink_on: Cell::new(true),
         rows: RefCell::default(),
         drawn: Cell::default(),
         viewer: None,
@@ -415,6 +420,19 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let _ = title_proxy.send_event(UserEvent::Exit);
     });
 
+    if config.cursor.blink {
+        let view = Rc::downgrade(&view);
+        glib::timeout_add_local(std::time::Duration::from_millis(530), move || {
+            let Some(view) = view.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            if let Ok(v) = view.try_borrow() {
+                v.blink_on.set(!v.blink_on.get());
+                v.invalidate();
+            }
+            glib::ControlFlow::Continue
+        });
+    }
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
@@ -422,6 +440,14 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 let mut v = view.borrow_mut();
                 v.redraw.pending.store(false, Ordering::Release);
                 v.layout();
+            }
+            Event::WindowEvent {
+                event: WindowEvent::Focused(focused),
+                ..
+            } => {
+                let v = view.borrow();
+                v.focused.set(focused);
+                v.invalidate();
             }
             Event::UserEvent(UserEvent::Title(set)) => {
                 window.set_title(if set.is_empty() { &title } else { &set })
@@ -851,9 +877,14 @@ impl View {
             self.laid_scroll = self.scroll;
             self.show_indicator();
         }
-        // Only the rows that changed, with the margins of their images (see
-        // draw_line): the compositor then takes less of the window.
-        match session.read(|term| self.changed_rows(term)) {
+        self.invalidate();
+    }
+
+    /// Asks GTK to draw the rows that changed again, with the margins of
+    /// their images (see draw_line): the compositor then takes less of the
+    /// window.
+    fn invalidate(&self) {
+        match self.session.read(|term| self.changed_rows(term)) {
             Some(rows) => {
                 let (ch, width) = (self.cell.1, self.area.allocated_width());
                 for row in rows {
