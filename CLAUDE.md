@@ -90,6 +90,10 @@ RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
   hauteur de ligne est fixée à la cellule mesurée, une ligne dont un glyphe
   manque à la police est dessinée cellule par cellule, et chaque glyphe de
   secours est posé sur la ligne de base de la police (`draw.rs`).
+- Même dans la police configurée, `│` ne couvre pas toute la hauteur de la
+  cellule (arrondie au pixel supérieur) : les caractères de cadre et les
+  blocs (U+2500 à U+259F, sauf les pointillés) sont dessinés par raterm
+  (`boxes.rs`), comme le font alacritty et VTE.
 - Les noms de police doivent être entre guillemets en CSS (`Source Serif 4`).
 - Sous Wayland avec Nvidia, le rendu DMA-BUF plante : `main.rs` pose
   `WEBKIT_DISABLE_DMABUF_RENDERER=1`.

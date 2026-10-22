@@ -3,6 +3,7 @@
 //! child web views placed in the flow.
 
 mod blocks;
+mod boxes;
 mod draw;
 mod keys;
 mod search;

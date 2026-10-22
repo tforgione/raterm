@@ -7,7 +7,7 @@ use gtk::{cairo, pango};
 use raterm::config;
 use raterm::term::{Attrs, CursorShape, Line, Run, Terminal, Tint};
 
-use super::{PAD_X, PAD_Y, View, Visual};
+use super::{PAD_X, PAD_Y, View, Visual, boxes};
 
 pub(super) struct Theme {
     pub(super) fg: u32,
@@ -454,6 +454,8 @@ impl View {
         layout.set_font_description(Some(&self.font));
         let attrs = pango::AttrList::new();
         let mut text = String::new();
+        // Box drawing chars, drawn by raterm after the text.
+        let mut drawn = Vec::new();
         for (run, chars, mark) in &parts {
             let (fg, bg) = colors(run, *mark, marks.cursor);
             let x = PAD_X + (chars[0].0 - start) as f64 * cw;
@@ -465,8 +467,11 @@ impl View {
             let hidden = run.style.attrs.has(Attrs::HIDDEN);
             if whole {
                 let from = text.len() as u32;
-                for &(_, c) in chars {
-                    text.push_str(if hidden { " " } else { c });
+                for &(cell, c) in chars {
+                    if !hidden && boxes::drawn(c) {
+                        drawn.push((cell, c, fg));
+                    }
+                    text.push_str(if hidden || boxes::drawn(c) { " " } else { c });
                 }
                 text_attrs(&attrs, fg, run.style.attrs, from..text.len() as u32);
                 continue;
@@ -490,6 +495,10 @@ impl View {
                 let (cell, first) = chars[i];
                 let mut text = first.to_owned();
                 i += 1;
+                if boxes::drawn(first) {
+                    drawn.push((cell, first, fg));
+                    continue;
+                }
                 if regional(&text) && i < chars.len() && regional(chars[i].1) {
                     text += chars[i].1;
                     i += 1;
@@ -504,6 +513,10 @@ impl View {
             layout.set_text(&text);
             layout.set_attributes(Some(&attrs));
             gtk::render_layout(style, cr, PAD_X + (first - start) as f64 * cw, y, &layout);
+        }
+        for (cell, c, fg) in drawn {
+            set_color(cr, fg, 1.0);
+            boxes::draw(cr, c, PAD_X + (cell - start) as f64 * cw, y, cw, ch);
         }
         // A block cursor is drawn by its colors; the others over the text.
         let cursor = parts
