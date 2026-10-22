@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Writes the Performance page of the wiki from a campaign: its tables come
-from DIR/summary.md (see charts/build.sh), the numbers of its text from
+"""Writes the Performance pages of the wiki from a campaign: Performance.md,
+the text and the charts, and Performance-tables.md, the tables. The tables
+come from DIR/summary.md (see charts/build.sh), the numbers of the text from
 DIR/results.jsonl, and the before/after table from the raterm measures of
 the first campaign (baseline-2026-10-20.jsonl). The setup section describes
 the machine of these measures: edit it when that changes.
 
-    page.py DIR OUT.md [COMMIT]     # COMMIT: raterm's, HEAD by default
+    page.py DIR WIKI [COMMIT]     # COMMIT: raterm's, HEAD by default
 """
 
 import json
@@ -16,7 +17,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-new_dir, out = Path(sys.argv[1]), Path(sys.argv[2])
+new_dir, wiki = Path(sys.argv[1]), Path(sys.argv[2])
 commit = sys.argv[3] if len(sys.argv) > 3 else subprocess.run(
     ["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, check=True
 ).stdout.strip()
@@ -75,6 +76,8 @@ per_line = (sb("raterm", 1_000_000) - sb("raterm", 10_000)) * 2**20 / 990_000
 ala_line = (sb("alacritty", 100_000) - sb("alacritty", 10_000)) * 2**10 / 90_000
 runs = max(r["run"] for r in rows if r["bench"] == "latency") + 1
 sb_runs = max(r["run"] for r in rows if r["bench"] == "scrollback") + 1
+blocks = {n: m("blocks", "pss_mib", terminal="raterm", blocks=n) for n in (20, 200)}
+tables = lambda anchor: f"Tables: [Performance tables](Performance-tables#{anchor})."
 
 page = f"""# Performance
 
@@ -100,7 +103,8 @@ script `extra/bench/bench.py`.
   Terminal, {first["terminator"]:.0f} ms for Terminator and {first["alacritty"]:.0f} ms for Alacritty.
 - **Memory**: {idle["raterm"]:.0f} MiB idle (PSS, in one process: WebKit only starts with
   the first block), against {idle["gnome-terminal"]:.0f} MiB for GNOME Terminal, {idle["terminator"]:.0f} MiB for Terminator
-  and {idle["alacritty"]:.0f} MiB for Alacritty.
+  and {idle["alacritty"]:.0f} MiB for Alacritty. With 20 small Markdown blocks in view,
+  {blocks[20]:.0f} MiB: their web views share one WebKit process.
 - **Scrollback**: since M5, a full scrollback no longer slows raterm down, up
   to 1,000,000 lines; it costs about {per_line:.0f} bytes per line of memory, where VTE
   keeps its scrollback in files and stays flat.
@@ -151,6 +155,9 @@ takes one compositor frame, so **every time is precise to about one frame**
   1,000,000 lines of about 60 characters (Alacritty stops at 100,000); 15
   seconds later the memory is measured, then 4 MiB more output and the
   latency.
+- **Blocks** (raterm only): the program writes 20 or 200 small Markdown
+  blocks, two rows each, about 20 of which fit in the window; 3 seconds
+  later the memory is measured.
 
 Each terminal runs isolated, without touching the user's own: GNOME Terminal
 on a server of its own (`--app-id`) whose settings live in a GSettings
@@ -159,21 +166,23 @@ file, raterm and Alacritty on their own config files.
 
 ## Results
 
+The tables of these results are on [Performance tables](Performance-tables).
+
 ### Throughput
 
 {img("throughput")}
 
-{sections["Throughput"].strip()}
-
 raterm drains 4 MiB in {span(drains, "{:.2f}")} s, {span(drain_ratio)} times slower than the fastest of the
-others (terminal state and screen diff), and the screen catches up
-{span(catch, "{:.2f}")} s later. The CPU time is about {cpu_ratio:.1f} times the time to display.
+others (the terminal state), and the screen catches up {span(catch, "{:.2f}")} s later. The
+CPU time is about {cpu_ratio:.1f} times the time to display.
+
+{tables("throughput")}
 
 ### Latency
 
 {img("latency")}
 
-{sections["Latency"].strip()}
+{tables("latency")}
 
 ### Startup and memory
 
@@ -181,13 +190,11 @@ others (terminal state and screen diff), and the screen catches up
 
 {img("memory")}
 
-{sections["Startup and memory"].strip()}
+{tables("startup-and-memory")}
 
 ### Scrollback
 
 {img("scrollback")}
-
-{sections["Scrollback"].strip()}
 
 raterm keeps its scrollback in memory in the core and only draws the rows on
 screen (see [Spec-Scrollback](Spec-Scrollback)): the latency and
@@ -195,6 +202,18 @@ the output speed do not depend on its size, and a line costs about {per_line:.0f
 Alacritty keeps its whole scrollback in memory too, at about {ala_line:.1f} KiB per line;
 VTE writes it to temporary files, so the memory of GNOME Terminal and
 Terminator does not grow.
+
+{tables("scrollback")}
+
+### Blocks
+
+With 20 small Markdown blocks in view, raterm takes {blocks[20]:.0f} MiB; with 200, most of
+them in the scrollback, {blocks[200]:.0f} MiB. The web views of the blocks share one
+WebKit process, and only the blocks in view have one: a block that leaves
+the view only keeps its HTML and its height. Before they shared it, each
+block in view started a process of its own, about 200 MiB each.
+
+{tables("blocks")}
 
 ## Since the first measures
 
@@ -205,10 +224,10 @@ a batch was rebuilt even though only the last one is painted, and every line
 of a large output became a DOM element. Two fixes and M5 (the scrollback kept
 by the core, a window of it in the page), then work on the core (styles built
 only when attributes change, all the pending output in one batch, the page
-taking all the pending events at once), and last the native grid, which
-replaced the page with Pango drawing, changed the time to display 4 MiB:
-
-{chr(10).join(before)}
+taking all the pending events at once), the native grid, which replaced the
+page with Pango drawing, and last a core that renders the screen only when
+it is drawn made raterm {span(gains)} times faster to display 4 MiB
+(see [the table](Performance-tables#since-the-first-measures)).
 
 ## Running it
 
@@ -220,14 +239,24 @@ windows it opened.
 
 ```sh
 cargo build --release
-BENCH_MIB=4 extra/bench/bench.py run --only startup,latency,throughput --runs 5 --out bench-results
+BENCH_MIB=4 extra/bench/bench.py run --only startup,latency,throughput,blocks --runs 5 --out bench-results
 BENCH_MIB=4 extra/bench/bench.py run --only scrollback --runs 2 --out bench-results
 extra/bench/charts/build.sh bench-results ../raterm.wiki/bench   # tables and charts
-extra/bench/page.py bench-results ../raterm.wiki/Performance.md  # this page
+extra/bench/page.py bench-results ../raterm.wiki                 # these pages
 ```
 
 `--terminals raterm,gnome-terminal,terminator,alacritty` selects the
 terminals; results append to `bench-results/results.jsonl`, so a run on
 another screen (at 120 Hz for instance) adds to the same report.
 """
-out.write_text(page)
+(wiki / "Performance.md").write_text(page)
+
+annex = f"""# Performance tables
+
+The measures behind the charts of [Performance](Performance), where the
+setup and the method are: medians over {runs} runs ({sb_runs} for the scrollback).
+"""
+for name in ["Throughput", "Latency", "Startup and memory", "Scrollback", "Blocks"]:
+    annex += f"\n## {name}\n\n{sections[name].strip()}\n"
+annex += f"\n## Since the first measures\n\nraterm's time to display 4 MiB, on Oct 20, 2026 and now:\n\n{chr(10).join(before)}\n"
+(wiki / "Performance-tables.md").write_text(annex)
