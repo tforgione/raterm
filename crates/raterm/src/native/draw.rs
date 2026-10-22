@@ -302,9 +302,12 @@ impl View {
             .is_some_and(|r| r.is(line, start, marks, cw, width));
         // Glyphs of fallback fonts can be taller than a cell: the image has
         // a transparent margin of a cell above and below, where they spill
-        // over the next rows as when drawn directly.
+        // over the next rows as when drawn directly. ASCII stays in its
+        // cell: without margins, its images take a third of the memory.
         if !kept {
-            let height = (3.0 * ch).ceil() as i32;
+            let ascii = line.runs.iter().all(|r| r.text.is_ascii());
+            let margin = if ascii { 0.0 } else { ch };
+            let height = (ch + 2.0 * margin).ceil() as i32;
             let Ok(image) = cr
                 .target()
                 .create_similar(cairo::Content::ColorAlpha, width, height)
@@ -314,7 +317,7 @@ impl View {
             let Ok(rc) = cairo::Context::new(&image) else {
                 return;
             };
-            self.render_line(&rc, style, line, start, ch, marks);
+            self.render_line(&rc, style, line, start, margin, marks);
             raterm::trace!("rendered {row}");
             rows[row] = Some(Row {
                 line: line.clone(),
@@ -322,12 +325,13 @@ impl View {
                 marks: marks.clone(),
                 cell: cw,
                 width,
+                margin,
                 image,
             });
         }
-        let image = &rows[row].as_ref().unwrap().image;
-        let _ = cr.set_source_surface(image, 0.0, y - ch);
-        cr.rectangle(0.0, y - ch, width as f64, 3.0 * ch);
+        let Row { image, margin, .. } = rows[row].as_ref().unwrap();
+        let _ = cr.set_source_surface(image, 0.0, y - margin);
+        cr.rectangle(0.0, y - margin, width as f64, ch + 2.0 * margin);
         let _ = cr.fill();
     }
 
@@ -468,6 +472,8 @@ pub(super) struct Row {
     /// The width of a cell (the zoom changes the font), and of the view.
     cell: f64,
     width: i32,
+    /// The transparent margin above and below the row in its image.
+    margin: f64,
     image: cairo::Surface,
 }
 
