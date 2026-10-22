@@ -70,6 +70,15 @@ pub(super) fn measure(area: &gtk::DrawingArea, font: &pango::FontDescription) ->
     (w as f64 / scale / 100.0, (h as f64 / scale).ceil())
 }
 
+/// The chars the configured font has glyphs for.
+pub(super) fn coverage(
+    area: &gtk::DrawingArea,
+    font: &pango::FontDescription,
+) -> Option<pango::Coverage> {
+    let font = area.pango_context().load_font(font)?;
+    Some(font.coverage(&pango::Language::default()))
+}
+
 /// Cells a run takes.
 pub(super) fn cells(run: &Run) -> usize {
     match run.cluster {
@@ -244,18 +253,27 @@ impl View {
         let Some(first) = parts.first().map(|(_, chars, _)| chars[0].0) else {
             return;
         };
-        // A row of ASCII is shaped as one text, its styles as attributes:
-        // shaping each part on its own took 10 ms for a screen of code. The
-        // layout is kept for the next frames, while the row stays the same.
-        let ascii = parts
-            .iter()
-            .all(|(_, chars, _)| chars.iter().all(|&(_, c)| c.is_ascii()));
+        // A row of the font's own glyphs, a cell each, is shaped as one text,
+        // its styles as attributes: shaping each part on its own took 10 ms
+        // for a screen of code, and each char on its own 26 ms for one of
+        // French. The layout is kept for the next frames, while the row stays
+        // the same. Glyphs of fallback fonts are drawn cell by cell.
+        let own = |c: char| {
+            c.is_ascii()
+                || self
+                    .coverage
+                    .as_ref()
+                    .is_some_and(|cov| cov.get(c as i32) == pango::CoverageLevel::Exact)
+        };
+        let whole = parts.iter().all(|(run, chars, _)| {
+            run.cluster == 0 && wide(run) == 1 && chars.iter().all(|&(_, c)| c.chars().all(own))
+        });
         let mut shaped = self.shaped.borrow_mut();
         if shaped.len() <= row {
             shaped.resize_with(row + 1, || None);
         }
         let kept = shaped[row].as_ref().filter(|s| {
-            ascii && s.start == start && s.cell == cw && s.marks == *marks && s.line == *line
+            whole && s.start == start && s.cell == cw && s.marks == *marks && s.line == *line
         });
         let layout = match kept {
             Some(s) => s.layout.clone(),
@@ -280,7 +298,7 @@ impl View {
             if kept {
                 continue;
             }
-            if ascii {
+            if whole {
                 let from = text.len() as u32;
                 for &(_, c) in chars {
                     text.push_str(if hidden { " " } else { c });
@@ -314,7 +332,7 @@ impl View {
                 gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
             }
         }
-        if !ascii {
+        if !whole {
             shaped[row] = None;
             return;
         }
@@ -333,7 +351,8 @@ impl View {
     }
 }
 
-/// The layout of an ASCII row of the view, and what it was made from.
+/// The layout of a row of the view shaped as one text, and what it was
+/// made from.
 pub(super) struct Shaped {
     line: Line,
     start: usize,

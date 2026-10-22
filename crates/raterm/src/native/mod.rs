@@ -65,6 +65,8 @@ struct View {
     area: gtk::DrawingArea,
     fixed: gtk::Fixed,
     font: pango::FontDescription,
+    /// The chars `font` has glyphs for, drawn a row at a time.
+    coverage: Option<pango::Coverage>,
     cell: (f64, f64),
     size: (u16, u16),
     /// Rows scrolled up from the end of the flow.
@@ -183,6 +185,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         cell,
         area: area.clone(),
         fixed,
+        coverage: draw::coverage(&area, &font),
         font,
         size: (0, 0),
         scroll: 0,
