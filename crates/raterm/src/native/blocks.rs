@@ -201,7 +201,7 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
         // Opaque, even when the window is not: WebKit repaints only what
         // changes (a selection) over what was there, and a translucent or
         // transparent view lost the rest of the block or built it up.
-        let bg = |shift: u32| ((theme().bg >> shift) & 0xff) as f64 / 255.0;
+        let bg = |shift: u32| ((background(&self.config) >> shift) & 0xff) as f64 / 255.0;
         view.set_background_color(&gdk::RGBA::new(bg(16), bg(8), bg(0), 1.0));
         view.set_can_focus(false);
         // One selection at a time: one in a block clears the others.
@@ -334,6 +334,11 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
     }
 }
 
+/// The background of blocks, as configured.
+fn background(config: &Config) -> u32 {
+    config.blocks.background.map_or(theme().bg, |c| c.0)
+}
+
 /// The stylesheet of blocks; `scale` is that of the zoom.
 pub(super) fn block_style(config: &Config, cell_width: f64, scale: f64) -> String {
     let t = theme();
@@ -381,7 +386,7 @@ body.md > table {{ max-width: none; margin: 8px auto; }}
 ::selection {{ background: rgba({sel_r}, {sel_g}, {sel_b}, 0.99); color: #{sel_text:06x}; }}
 "#,
         fg = t.fg,
-        bg = t.bg,
+        bg = background(config),
         // Not quite opaque: WebKit makes an opaque selection color translucent.
         sel_r = t.selection >> 16,
         sel_g = t.selection >> 8 & 0xff,

@@ -122,6 +122,8 @@ pub struct Blocks {
     pub font_family: String,
     /// In points, like the terminal font.
     pub font_size: f32,
+    /// The terminal's background when unset.
+    pub background: Option<Rgb>,
 }
 
 impl Default for Blocks {
@@ -129,6 +131,7 @@ impl Default for Blocks {
         Blocks {
             font_family: "sans-serif".into(),
             font_size: 12.0,
+            background: None,
         }
     }
 }
@@ -257,6 +260,15 @@ mod tests {
             }
         );
         assert_eq!(config.window.opacity(), 1.0);
+    }
+
+    #[test]
+    fn blocks_background_defaults_to_the_terminal() {
+        let blocks = |text| Config::parse(text).unwrap().blocks;
+        assert_eq!(blocks("").background, None);
+        let set = blocks("[blocks]\nbackground = \"#2a2d33\"");
+        assert_eq!(set.background, Some(Rgb(0x2a2d33)));
+        assert!(Config::parse("[blocks]\nbackground = \"red\"").is_err());
     }
 
     #[test]
