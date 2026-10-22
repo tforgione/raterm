@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use raterm::config::{self, Config};
+use raterm::config::Config;
 use raterm::history;
 use raterm::media;
 use raterm::pty::Error;
@@ -243,13 +243,6 @@ fn serve(path: &str, config_js: &str, csp: &str) -> Response<Cow<'static, [u8]>>
         "/style.css" => (include_bytes!("../assets/style.css").into(), "text/css"),
         "/app.js" => (include_bytes!("../assets/app.js").into(), "text/javascript"),
         "/config.js" => (config_js.as_bytes().to_vec().into(), "text/javascript"),
-        // Loaded last, so it overrides everything; empty when absent.
-        "/user.css" => (
-            std::fs::read(config::dir().join("user.css"))
-                .unwrap_or_default()
-                .into(),
-            "text/css",
-        ),
         _ => {
             return Response::builder()
                 .status(404)

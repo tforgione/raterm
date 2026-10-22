@@ -25,7 +25,7 @@ function fontFamily(names, fallback) {
 }
 
 root.style.setProperty("--font-family", fontFamily(config.font.family, "monospace"));
-// [colors] of config.toml: inline, so over user.css.
+// [colors] of config.toml, over the defaults of style.css.
 const COLOR_VARS = { foreground: "--fg", background: "--bg", cursor: "--cursor", selection: "--selection", selection_text: "--selection-text" };
 for (const [key, name] of Object.entries(COLOR_VARS)) {
   if (config.colors[key]) root.style.setProperty(name, config.colors[key]);
@@ -434,7 +434,7 @@ function richStyle() {
     }
     pre { padding: 8px; background: rgba(255, 255, 255, 0.05); overflow-x: auto; }
     /* Syntax highlighting: classes are TextMate scopes, colored with the
-       terminal palette so that user.css themes them too. */
+       terminal palette so that [colors] themes them too. */
     .comment { color: var(--c8); font-style: italic; }
     .string { color: var(--c2); }
     .constant { color: var(--c3); }

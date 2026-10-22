@@ -1,7 +1,4 @@
 //! User configuration, read from `$XDG_CONFIG_HOME/raterm/config.toml`.
-//!
-//! Colors set in `[colors]` go over those of `user.css`, next to this file,
-//! which also styles the page and the blocks.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -31,7 +28,7 @@ pub struct Config {
     pub keys: BTreeMap<String, Binding>,
 }
 
-/// The palette, as in alacritty; each color unset comes from `user.css`.
+/// The palette, as in alacritty; each color unset keeps the default theme's.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Colors {
@@ -214,7 +211,7 @@ impl Config {
 }
 
 /// `$XDG_CONFIG_HOME/raterm`, or `~/.config/raterm`.
-pub fn dir() -> PathBuf {
+fn dir() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
