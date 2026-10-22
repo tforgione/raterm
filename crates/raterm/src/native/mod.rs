@@ -65,6 +65,9 @@ struct View {
     area: gtk::DrawingArea,
     fixed: gtk::Fixed,
     font: pango::FontDescription,
+    /// The baseline of `font` from the top of a cell, which glyphs of
+    /// fallback fonts are drawn on.
+    baseline: f64,
     /// The chars `font` has glyphs for, drawn a row at a time.
     coverage: Option<pango::Coverage>,
     cell: (f64, f64),
@@ -182,12 +185,14 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     });
     let modes = Arc::new(Mutex::new(Modes::default()));
     let cell = measure(&area, &font);
+    let baseline = draw::baseline(&area, &font);
     let view = Rc::new(RefCell::new(View {
         session: session.clone(),
         block_style: block_style(&config, cell.0, 1.0),
         config: config.clone(),
         zoom: 0,
         cell,
+        baseline,
         area: area.clone(),
         fixed,
         coverage: draw::coverage(&area, &font),
@@ -471,6 +476,7 @@ impl View {
         self.font
             .set_size((self.config.font.size as f64 * scale * pango::SCALE as f64) as i32);
         self.cell = measure(&self.area, &self.font);
+        self.baseline = draw::baseline(&self.area, &self.font);
         self.block_style = block_style(&self.config, self.cell.0, scale);
         for view in self.blocks.values() {
             unsafe { view.destroy() };

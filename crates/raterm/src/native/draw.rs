@@ -70,6 +70,13 @@ pub(super) fn measure(area: &gtk::DrawingArea, font: &pango::FontDescription) ->
     (w as f64 / scale / 100.0, (h as f64 / scale).ceil())
 }
 
+/// The baseline of the configured font from the top of a cell, in pixels.
+pub(super) fn baseline(area: &gtk::DrawingArea, font: &pango::FontDescription) -> f64 {
+    let layout = area.create_pango_layout(Some("X"));
+    layout.set_font_description(Some(font));
+    layout.baseline() as f64 / pango::SCALE as f64
+}
+
 /// The chars the configured font has glyphs for.
 pub(super) fn coverage(
     area: &gtk::DrawingArea,
@@ -400,9 +407,10 @@ impl View {
             text_attrs(&attrs, fg, run.style.attrs, 0..u32::MAX);
             layout.set_attributes(Some(&attrs));
             // Glyphs of fallback fonts have other widths: each cell is drawn
-            // at its place, so that the rest of the line stays on the grid.
-            // Two regional indicators make a flag: drawn as one glyph from
-            // the first cell.
+            // at its place, so that the rest of the line stays on the grid,
+            // and on the baseline of the configured font, as their fonts
+            // have other heights. Two regional indicators make a flag: drawn
+            // as one glyph from the first cell.
             let mut i = 0;
             while i < chars.len() {
                 let (cell, first) = chars[i];
@@ -413,7 +421,9 @@ impl View {
                     i += 1;
                 }
                 layout.set_text(&text);
-                gtk::render_layout(style, cr, PAD_X + (cell - start) as f64 * cw, y, &layout);
+                let shift = self.baseline - layout.baseline() as f64 / pango::SCALE as f64;
+                let x = PAD_X + (cell - start) as f64 * cw;
+                gtk::render_layout(style, cr, x, y + shift, &layout);
             }
         }
         if whole {
