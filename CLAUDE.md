@@ -87,8 +87,9 @@ RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
 - La webview d'un bloc est opaque : transparente, elle perdait le reste du
   bloc en repeignant une sélection.
 - Les glyphes des polices de secours ont d'autres largeurs et hauteurs : la
-  hauteur de ligne est fixée à la cellule mesurée, et hors ASCII chaque
-  cellule est dessinée à sa place (`draw.rs`).
+  hauteur de ligne est fixée à la cellule mesurée, une ligne dont un glyphe
+  manque à la police est dessinée cellule par cellule, et chaque glyphe de
+  secours est posé sur la ligne de base de la police (`draw.rs`).
 - Les noms de police doivent être entre guillemets en CSS (`Source Serif 4`).
 - Sous Wayland avec Nvidia, le rendu DMA-BUF plante : `main.rs` pose
   `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
