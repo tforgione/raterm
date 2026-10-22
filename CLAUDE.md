@@ -80,6 +80,10 @@ RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
   `rgba(…, 0.99)`. Un texte sélectionné se glissait comme une image :
   `-webkit-user-drag: none` et `drag_cancel`, plus `removeAllRanges` avant
   un clic.
+- Une webview par processus coûte environ 200 Mio par bloc à l'écran : les
+  webviews sont liées (`related-view`) à une racine cachée pour partager un
+  processus. `WebView::with_related_view` du crate 2.0.2 prend une
+  référence de trop (critiques GLib) : passer par le builder.
 - La webview d'un bloc est opaque : transparente, elle perdait le reste du
   bloc en repeignant une sélection.
 - Les glyphes des polices de secours ont d'autres largeurs et hauteurs : la
