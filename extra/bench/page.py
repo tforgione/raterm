@@ -130,7 +130,10 @@ floating window opens with the script itself running inside it, which takes
 orders through a FIFO and paints colored markers; `grim` reads back a single
 pixel in the middle of the window until it has the expected color. A capture
 takes one compositor frame, so **every time is precise to about one frame**
-(17 ms at 60 Hz).
+(17 ms at 60 Hz), except latency: a small Wayland client of the bench
+(`extra/bench/probe`) captures the pixel frame after frame, and the
+compositor tells when each frame was presented, so latency is exact to the
+frame, without the time grim takes to start.
 
 - **Throughput**: the program writes a 4 MiB file to the terminal, then fills
   the screen with a marker color. *Drained* is when its write returns (the
@@ -139,9 +142,10 @@ takes one compositor frame, so **every time is precise to about one frame**
   256 colors, truecolor text with backgrounds, CJK with emoji, and random
   cursor moves without scrolling (like a full-screen program).
 - **Latency**: the program paints a small block in another color when it is
-  told to; the time is from the order to the frame showing the block, with a
-  random pause between samples to spread them over the frame. Typing is
-  not measured.
+  told to; the time is from the order to the presentation of the frame
+  showing the block, with a random pause between samples to spread them over
+  the frame. Typing is not measured. Measures before Oct 22, 2026 polled with
+  grim, which added its own 10 to 30 ms.
 - **Startup**: from the launch request to the first frame painted by the
   program, which fills the screen as soon as it starts. Hyprland's own time
   to open a window is included, the same for all.
@@ -234,8 +238,8 @@ it is drawn made raterm {span(gains)} times faster to display 4 MiB
 The windows open floating at the top left of the current workspace and do not
 take the focus; the screen must stay on that workspace until the end, and
 must not lock, as a hidden window cannot be read back (its run times out and
-is skipped). The script needs `grim` and Hyprland, and only ever closes the
-windows it opened.
+is skipped). The script needs `grim`, Hyprland and cargo (it builds
+`extra/bench/probe`), and only ever closes the windows it opened.
 
 ```sh
 cargo build --release

@@ -1,0 +1,13 @@
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-only"
+description = "Tells when a pixel of the screen shows a color, for extra/bench"
+
+# Apart from raterm's workspace: the bench's dependencies stay out of it.
+[workspace]
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

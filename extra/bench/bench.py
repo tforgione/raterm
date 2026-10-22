@@ -6,6 +6,9 @@ script running inside it (`inner` mode) and taking orders from a FIFO. What
 the screen shows is read back with `grim`, one pixel at a time: a run is over
 when the pixel at the center of the window turns to the expected color. One
 capture takes one compositor frame, so every time is precise to one frame.
+Latency is measured with `probe/` instead, which gets from the compositor when
+the frame showing the pixel was presented: the start of grim and a capture
+that missed the frame would weigh more than the terminal.
 
     BENCH_MIB=4 bench.py run [--only startup,latency,throughput] [--runs N] [--out DIR]
     bench.py report DIR     # writes DIR/*.csv and prints Markdown tables
@@ -31,6 +34,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RATERM = ROOT / "target/release/raterm"
+PROBE = ROOT / "extra/bench/probe"
 FONT, SIZE = "UbuntuMono Nerd Font", 11
 WIDTH, HEIGHT, X, Y = 1200, 800, 60, 60
 WORKLOAD_MIB = int(os.environ.get("BENCH_MIB", 8))
@@ -191,6 +195,34 @@ def wait_pixel(x, y, want, timeout, interval=0):
             return seen
         time.sleep(interval)
     raise TimeoutError(f"pixel {x},{y} never turned {want}")
+
+
+class Probe:
+    """When a pixel shows a color, as the compositor presented it (probe/)."""
+
+    def __init__(self, x, y):
+        monitors = json.loads(subprocess.run(["hyprctl", "monitors", "-j"], capture_output=True, check=True).stdout)
+        m = next(
+            m for m in monitors
+            if 0 <= x - m["x"] < m["width"] / m["scale"] and 0 <= y - m["y"] < m["height"] / m["scale"]
+        )
+        self.proc = subprocess.Popen(
+            [PROBE / "target/release/probe", m["name"], str(x - m["x"]), str(y - m["y"])],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, bufsize=1,
+        )
+
+    def wait(self, color):
+        """The presentation time of the first frame with the pixel in `color`,
+        in nanoseconds of time.monotonic_ns."""
+        self.proc.stdin.write(" ".join(map(str, color)) + "\n")
+        line = self.proc.stdout.readline().strip()
+        if not line.isdigit():
+            raise TimeoutError(f"pixel never turned {color}")
+        return int(line)
+
+    def close(self):
+        self.proc.stdin.close()
+        self.proc.wait()
 
 
 def tree(pid, exclude):
@@ -418,13 +450,17 @@ def bench_latency(term, scratch, record, samples=60):
 
 
 def latencies(w, samples):
-    out = []
-    for i in range(samples):
-        # Random phase against the compositor's frames.
-        time.sleep(random.uniform(0.05, 0.1))
-        t0 = time.time_ns()
-        w.send(f"cell {i % 2}")
-        out.append((wait_pixel(*w.center, LATENCY_COLORS[i % 2], 10) - t0) / 1e6)
+    """Times from an order to the frame showing its output, in ms."""
+    probe, out = Probe(*w.center), []
+    try:
+        for i in range(samples):
+            # Random phase against the compositor's frames.
+            time.sleep(random.uniform(0.05, 0.1))
+            t0 = time.monotonic_ns()
+            w.send(f"cell {i % 2}")
+            out.append((probe.wait(LATENCY_COLORS[i % 2]) - t0) / 1e6)
+    finally:
+        probe.close()
     return out
 
 
@@ -490,6 +526,8 @@ def run(args):
     scratch = Path(tempfile.mkdtemp(prefix="raterm-bench-"))
     setup(scratch)
     files = workloads(out / f"workloads-{WORKLOAD_MIB}") if {"throughput", "scrollback"} & set(args.only) else {}
+    if {"latency", "scrollback"} & set(args.only):
+        subprocess.run(["cargo", "build", "--release", "--quiet", "--manifest-path", PROBE / "Cargo.toml"], check=True)
     hz = refresh_rate()
     results = out / "results.jsonl"
     with open(results, "a") as log:
