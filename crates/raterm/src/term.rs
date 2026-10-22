@@ -73,17 +73,94 @@ pub struct Run {
     pub cluster: u8,
 }
 
+/// Serialized as the CSS of the first versions (`var(--c1)`, `#ff8800`,
+/// `"b u"`), which the snapshots keep.
 #[derive(Serialize, Debug, Clone, PartialEq, Default)]
 pub struct Style {
+    /// `None` for the default colors.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fg: Option<String>,
+    pub fg: Option<Tint>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub bg: Option<String>,
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub class: String,
+    pub bg: Option<Tint>,
+    #[serde(rename = "class", skip_serializing_if = "Attrs::is_empty")]
+    pub attrs: Attrs,
     /// Target of an OSC 8 hyperlink, or of a URL written in the text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link: Option<String>,
+}
+
+/// A color of a cell: the default ones (when inverse video swaps them), one
+/// of the 16 of the palette, or RGB.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Tint {
+    Fg,
+    Bg,
+    Palette(u8),
+    Rgb(u32),
+}
+
+impl Serialize for Tint {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Tint::Fg => s.serialize_str("var(--fg)"),
+            Tint::Bg => s.serialize_str("var(--bg)"),
+            Tint::Palette(i) => s.serialize_str(&format!("var(--c{i})")),
+            Tint::Rgb(v) => s.serialize_str(&format!("#{v:06x}")),
+        }
+    }
+}
+
+/// Attributes of a cell, as bits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Attrs(u8);
+
+impl Attrs {
+    pub const BOLD: Attrs = Attrs(1);
+    pub const ITALIC: Attrs = Attrs(2);
+    pub const UNDERLINE: Attrs = Attrs(4);
+    pub const STRIKE: Attrs = Attrs(8);
+    pub const DIM: Attrs = Attrs(16);
+    pub const HIDDEN: Attrs = Attrs(32);
+    /// Each char takes two cells (CJK, some emoji).
+    pub const WIDE: Attrs = Attrs(64);
+    /// The cursor's cell, drawn according to the configured cursor style.
+    pub const CURSOR: Attrs = Attrs(128);
+    const NAMES: [(Attrs, &str); 8] = [
+        (Attrs::BOLD, "b"),
+        (Attrs::ITALIC, "i"),
+        (Attrs::UNDERLINE, "u"),
+        (Attrs::STRIKE, "s"),
+        (Attrs::DIM, "d"),
+        (Attrs::HIDDEN, "h"),
+        (Attrs::WIDE, "wide"),
+        (Attrs::CURSOR, "cursor"),
+    ];
+
+    pub fn has(self, a: Attrs) -> bool {
+        self.0 & a.0 != 0
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0 == 0
+    }
+}
+
+impl std::ops::BitOr for Attrs {
+    type Output = Attrs;
+    fn bitor(self, a: Attrs) -> Attrs {
+        Attrs(self.0 | a.0)
+    }
+}
+
+impl Serialize for Attrs {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        let names: Vec<&str> = Attrs::NAMES
+            .iter()
+            .filter(|(a, _)| self.has(*a))
+            .map(|(_, name)| *name)
+            .collect();
+        s.serialize_str(&names.join(" "))
+    }
 }
 
 struct Listener(Sender<TermEvent>);
@@ -468,32 +545,25 @@ impl Terminal {
         };
         let (mut fg, mut bg) = (color(fg), color(cell.bg));
         if flags.contains(Flags::INVERSE) {
-            (fg, bg) = (
-                Some(bg.unwrap_or("var(--bg)".into())),
-                Some(fg.unwrap_or("var(--fg)".into())),
-            );
+            (fg, bg) = (Some(bg.unwrap_or(Tint::Bg)), Some(fg.unwrap_or(Tint::Fg)));
         }
-        let class = [
-            (flags.contains(Flags::BOLD), "b"),
-            (flags.contains(Flags::ITALIC), "i"),
-            (flags.intersects(Flags::ALL_UNDERLINES), "u"),
-            (flags.contains(Flags::STRIKEOUT), "s"),
-            (flags.contains(Flags::DIM), "d"),
-            (flags.contains(Flags::HIDDEN), "h"),
-            // Each character takes two cells (CJK, some emoji).
-            (flags.contains(Flags::WIDE_CHAR), "wide"),
-            // Drawn by the view, according to the configured cursor style.
-            (cursor, "cursor"),
+        let attrs = [
+            (flags.contains(Flags::BOLD), Attrs::BOLD),
+            (flags.contains(Flags::ITALIC), Attrs::ITALIC),
+            (flags.intersects(Flags::ALL_UNDERLINES), Attrs::UNDERLINE),
+            (flags.contains(Flags::STRIKEOUT), Attrs::STRIKE),
+            (flags.contains(Flags::DIM), Attrs::DIM),
+            (flags.contains(Flags::HIDDEN), Attrs::HIDDEN),
+            (flags.contains(Flags::WIDE_CHAR), Attrs::WIDE),
+            (cursor, Attrs::CURSOR),
         ]
         .iter()
         .filter(|(on, _)| *on)
-        .map(|(_, name)| *name)
-        .collect::<Vec<_>>()
-        .join(" ");
+        .fold(Attrs::default(), |all, &(_, a)| all | a);
         Style {
             fg,
             bg,
-            class,
+            attrs,
             link: None,
         }
     }
@@ -551,8 +621,9 @@ fn is_blank(cell: &Cell) -> bool {
         && (cell.bg == Color::Named(NamedColor::Background) || color(cell.bg).is_none())
 }
 
-/// CSS color for a cell color, `None` for the default foreground/background.
-fn color(color: Color) -> Option<String> {
+/// The color of a cell, `None` for the default foreground/background.
+fn color(color: Color) -> Option<Tint> {
+    let rgb = |r: u8, g: u8, b: u8| Tint::Rgb((r as u32) << 16 | (g as u32) << 8 | b as u32);
     match color {
         Color::Named(named) => {
             let named = if (NamedColor::DimBlack..=NamedColor::DimWhite).contains(&named) {
@@ -560,31 +631,20 @@ fn color(color: Color) -> Option<String> {
             } else {
                 named
             };
-            ((named as usize) < 16).then(|| format!("var(--c{})", named as usize))
+            ((named as usize) < 16).then_some(Tint::Palette(named as u8))
         }
-        Color::Indexed(i) if i < 16 => Some(format!("var(--c{i})")),
+        Color::Indexed(i) if i < 16 => Some(Tint::Palette(i)),
         Color::Indexed(i) if i < 232 => {
             let level = |v: u8| if v == 0 { 0 } else { 55 + 40 * v };
             let i = i - 16;
-            Some(hex(level(i / 36), level(i / 6 % 6), level(i % 6)))
+            Some(rgb(level(i / 36), level(i / 6 % 6), level(i % 6)))
         }
         Color::Indexed(i) => {
             let v = 8 + 10 * (i - 232);
-            Some(hex(v, v, v))
+            Some(rgb(v, v, v))
         }
-        Color::Spec(rgb) => Some(hex(rgb.r, rgb.g, rgb.b)),
+        Color::Spec(c) => Some(rgb(c.r, c.g, c.b)),
     }
-}
-
-fn hex(r: u8, g: u8, b: u8) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut s = String::with_capacity(7);
-    s.push('#');
-    for v in [r, g, b] {
-        s.push(DIGITS[(v >> 4) as usize] as char);
-        s.push(DIGITS[(v & 15) as usize] as char);
-    }
-    s
 }
 
 #[cfg(test)]
@@ -633,11 +693,14 @@ mod tests {
         term.advance(b"\x1b[1;31mA\x1b[38;5;196mB\x1b[38;2;1;2;3mC\x1b[0m");
         term.refresh();
         let styles: Vec<_> = term.screen()[0].runs.iter().map(|r| &r.style).collect();
-        assert_eq!(styles[0].fg.as_deref(), Some("var(--c1)"));
-        assert_eq!(styles[0].class, "b");
-        assert_eq!(styles[1].fg.as_deref(), Some("#ff0000"));
-        assert_eq!(styles[2].fg.as_deref(), Some("#010203"));
-        assert_eq!(styles[3].class, "cursor");
+        assert_eq!(styles[0].fg, Some(Tint::Palette(1)));
+        assert_eq!(styles[0].attrs, Attrs::BOLD);
+        assert_eq!(styles[1].fg, Some(Tint::Rgb(0xff0000)));
+        assert_eq!(styles[2].fg, Some(Tint::Rgb(0x010203)));
+        assert_eq!(styles[3].attrs, Attrs::CURSOR);
+        // As the CSS of the first versions, which the snapshots keep.
+        let json = serde_json::to_string(styles[0]).unwrap();
+        assert_eq!(json, r#"{"fg":"var(--c1)","class":"b"}"#);
     }
 
     #[test]
@@ -754,10 +817,7 @@ mod tests {
         term.bold_is_bright = true;
         term.advance(b"\x1b[1;31mA");
         term.refresh();
-        assert_eq!(
-            term.screen()[0].runs[0].style.fg.as_deref(),
-            Some("var(--c9)")
-        );
+        assert_eq!(term.screen()[0].runs[0].style.fg, Some(Tint::Palette(9)));
     }
 
     #[test]

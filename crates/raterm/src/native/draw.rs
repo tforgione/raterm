@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 use gtk::prelude::*;
 use gtk::{cairo, pango};
 use raterm::config;
-use raterm::term::{Line, Run, Terminal};
+use raterm::term::{Attrs, Line, Run, Terminal, Tint};
 
 use super::{PAD_X, PAD_Y, View, Visual};
 
@@ -89,7 +89,7 @@ pub(super) fn cells(run: &Run) -> usize {
 
 /// Cells each char of a run takes.
 fn wide(run: &Run) -> usize {
-    if run.style.class.contains("wide") {
+    if run.style.attrs.has(Attrs::WIDE) {
         2
     } else {
         1
@@ -294,7 +294,7 @@ impl View {
                 cr.rectangle(x, y, (chars.len() * wide(run)) as f64 * cw, ch);
                 let _ = cr.fill();
             }
-            let hidden = run.style.class.split(' ').any(|c| c == "h");
+            let hidden = run.style.attrs.has(Attrs::HIDDEN);
             if kept {
                 continue;
             }
@@ -303,17 +303,17 @@ impl View {
                 for &(_, c) in chars {
                     text.push_str(if hidden { " " } else { c });
                 }
-                text_attrs(&attrs, fg, &run.style.class, from..text.len() as u32);
+                text_attrs(&attrs, fg, run.style.attrs, from..text.len() as u32);
                 continue;
             }
             // Blanks have nothing more to draw: full-screen programs paint
             // with them.
-            let lined = run.style.class.split(' ').any(|c| c == "u" || c == "s");
+            let lined = run.style.attrs.has(Attrs::UNDERLINE | Attrs::STRIKE);
             if hidden || !lined && chars.iter().all(|&(_, c)| c == " ") {
                 continue;
             }
             let attrs = pango::AttrList::new();
-            text_attrs(&attrs, fg, &run.style.class, 0..u32::MAX);
+            text_attrs(&attrs, fg, run.style.attrs, 0..u32::MAX);
             layout.set_attributes(Some(&attrs));
             // Glyphs of fallback fonts have other widths: each cell is drawn
             // at its place, so that the rest of the line stays on the grid.
@@ -364,9 +364,9 @@ pub(super) struct Shaped {
 
 /// The text and background colors of a run, with a mark.
 fn colors(run: &Run, mark: Mark) -> (u32, Option<u32>) {
-    let mut fg = color(run.style.fg.as_deref()).unwrap_or(theme().fg);
-    let mut bg = color(run.style.bg.as_deref());
-    if run.style.class.contains("cursor") {
+    let mut fg = run.style.fg.map_or(theme().fg, rgb);
+    let mut bg = run.style.bg.map(rgb);
+    if run.style.attrs.has(Attrs::CURSOR) {
         (fg, bg) = (theme().bg, Some(theme().cursor));
     }
     match mark {
@@ -379,11 +379,11 @@ fn colors(run: &Run, mark: Mark) -> (u32, Option<u32>) {
 }
 
 /// Adds the attributes of a run's style to bytes `range` of a layout's text.
-fn text_attrs(attrs: &pango::AttrList, fg: u32, class: &str, range: std::ops::Range<u32>) {
+fn text_attrs(list: &pango::AttrList, fg: u32, attrs: Attrs, range: std::ops::Range<u32>) {
     let add = |mut attr: pango::Attribute| {
         attr.set_start_index(range.start);
         attr.set_end_index(range.end);
-        attrs.insert(attr);
+        list.insert(attr);
     };
     add(pango::AttrColor::new_foreground(
         ((fg >> 16) as u16) * 257,
@@ -391,15 +391,20 @@ fn text_attrs(attrs: &pango::AttrList, fg: u32, class: &str, range: std::ops::Ra
         ((fg & 0xff) as u16) * 257,
     )
     .into());
-    for c in class.split(' ') {
-        match c {
-            "b" => add(pango::AttrInt::new_weight(pango::Weight::Bold).into()),
-            "i" => add(pango::AttrInt::new_style(pango::Style::Italic).into()),
-            "u" => add(pango::AttrInt::new_underline(pango::Underline::Single).into()),
-            "s" => add(pango::AttrInt::new_strikethrough(true).into()),
-            "d" => add(pango::AttrInt::new_foreground_alpha(0x9999).into()),
-            _ => {}
-        }
+    if attrs.has(Attrs::BOLD) {
+        add(pango::AttrInt::new_weight(pango::Weight::Bold).into());
+    }
+    if attrs.has(Attrs::ITALIC) {
+        add(pango::AttrInt::new_style(pango::Style::Italic).into());
+    }
+    if attrs.has(Attrs::UNDERLINE) {
+        add(pango::AttrInt::new_underline(pango::Underline::Single).into());
+    }
+    if attrs.has(Attrs::STRIKE) {
+        add(pango::AttrInt::new_strikethrough(true).into());
+    }
+    if attrs.has(Attrs::DIM) {
+        add(pango::AttrInt::new_foreground_alpha(0x9999).into());
     }
 }
 
@@ -443,18 +448,12 @@ pub(super) fn set_color(cr: &cairo::Context, rgb: u32, alpha: f64) {
     cr.set_source_rgba(c(16), c(8), c(0), alpha);
 }
 
-/// A color of the core (`var(--c1)`, `#rrggbb`, `var(--fg)`), as RGB.
-pub(super) fn color(spec: Option<&str>) -> Option<u32> {
-    let spec = spec?;
-    if let Some(hex) = spec.strip_prefix('#') {
-        return u32::from_str_radix(hex, 16).ok();
-    }
-    match spec.strip_prefix("var(--")?.strip_suffix(')')? {
-        "fg" => Some(theme().fg),
-        "bg" => Some(theme().bg),
-        c => theme()
-            .palette
-            .get(c.strip_prefix('c')?.parse::<usize>().ok()?)
-            .copied(),
+/// A color of the core, as RGB in the theme.
+fn rgb(tint: Tint) -> u32 {
+    match tint {
+        Tint::Fg => theme().fg,
+        Tint::Bg => theme().bg,
+        Tint::Palette(i) => theme().palette[i as usize % 16],
+        Tint::Rgb(v) => v,
     }
 }
