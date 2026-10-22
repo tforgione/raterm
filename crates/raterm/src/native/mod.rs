@@ -27,7 +27,7 @@ use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
-use webkit2gtk::{WebContext, WebView, WebViewExt};
+use webkit2gtk::{WebView, WebViewExt};
 
 use blocks::{Find, block_style};
 use draw::{cells, measure};
@@ -77,7 +77,9 @@ struct View {
     /// Heights of the blocks measured so far, in pixels; filled by the web
     /// views once loaded, kept when they leave the view.
     heights: Rc<RefCell<HashMap<u64, f64>>>,
-    context: Option<WebContext>,
+    /// Never shown: the web views of blocks are related to it, so that they
+    /// share its web process instead of starting one each.
+    root: Option<WebView>,
     redraw: Arc<Redraw>,
     /// This view, for the handlers of the web views it makes.
     me: Weak<RefCell<View>>,
@@ -185,7 +187,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         seen_next: 0,
         blocks: HashMap::new(),
         heights: Rc::default(),
-        context: None,
+        root: None,
         redraw: redraw.clone(),
         me: Weak::new(),
         selection: None,

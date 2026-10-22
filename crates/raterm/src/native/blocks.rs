@@ -9,7 +9,7 @@ use raterm::config::Config;
 use raterm::rich::{Kind, Rendered};
 use webkit2gtk::{
     LoadEvent, NavigationPolicyDecisionExt, NavigationType, PolicyDecisionExt, PolicyDecisionType,
-    SettingsExt, URIRequestExt, WebContext, WebView, WebViewExt,
+    SettingsExt, URIRequestExt, WebView, WebViewExt,
 };
 
 use super::View;
@@ -88,8 +88,7 @@ impl View {
     /// Shows an image full window over the terminal, until a click or Escape.
     pub(super) fn open_viewer(&mut self, image: &Rendered) {
         if self.viewer.is_none() {
-            let context = self.context.get_or_insert_with(WebContext::new);
-            let viewer = WebView::with_context(context);
+            let viewer = self.web_view();
             if let Some(settings) = WebViewExt::settings(&viewer) {
                 settings.set_enable_javascript_markup(false);
             }
@@ -181,11 +180,19 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
         }
     }
 
+    /// A new web view, in the web process of the others: one process each
+    /// took about 200 MiB per block in view.
+    fn web_view(&mut self) -> WebView {
+        let root = self.root.get_or_insert_with(WebView::new);
+        // Not `WebView::with_related_view`, which takes one reference too
+        // many in webkit2gtk 2.0.2 (GLib criticals on unref).
+        WebView::builder().related_view(root).build()
+    }
+
     /// A web view for a block: its document is the block's content alone,
     /// without scripts nor network, links open in the desktop's handler.
     pub(super) fn block_view(&mut self, entry: u64, block: &Rendered) -> WebView {
-        let context = self.context.get_or_insert_with(WebContext::new);
-        let view = WebView::with_context(context);
+        let view = self.web_view();
         if let Some(settings) = WebViewExt::settings(&view) {
             // Scripts of the document never run; raterm's own (measuring the
             // height) still can, from the API.
