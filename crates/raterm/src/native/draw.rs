@@ -315,6 +315,7 @@ impl View {
                 return;
             };
             self.render_line(&rc, style, line, start, ch, marks);
+            raterm::trace!("rendered {row}");
             rows[row] = Some(Row {
                 line: line.clone(),
                 start,

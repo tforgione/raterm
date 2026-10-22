@@ -240,6 +240,8 @@ take the focus; the screen must stay on that workspace until the end, and
 must not lock, as a hidden window cannot be read back (its run times out and
 is skipped). The script needs `grim`, Hyprland and cargo (it builds
 `extra/bench/probe`), and only ever closes the windows it opened.
+`extra/bench/trace.py` splits raterm's latency into the stages of a redraw
+(see [Development](Development)).
 
 ```sh
 cargo build --release

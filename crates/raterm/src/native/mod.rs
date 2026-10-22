@@ -230,10 +230,27 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let view = view.clone();
         area.connect_size_allocate(move |_, alloc| view.borrow_mut().resized(alloc));
     }
+    #[cfg(feature = "trace")]
+    {
+        // The frame clock exists once the window is shown; after-paint is
+        // when GTK hands the frame to the compositor.
+        let hooked = Cell::new(false);
+        area.connect_draw(move |area, _| {
+            if !hooked.replace(true)
+                && let Some(clock) = area.frame_clock()
+            {
+                clock.connect_before_paint(|_| raterm::trace!("before-paint"));
+                clock.connect_after_paint(|_| raterm::trace!("after-paint"));
+            }
+            glib::Propagation::Proceed
+        });
+    }
     {
         let view = view.clone();
         area.connect_draw(move |_, cr| {
+            raterm::trace!("draw");
             view.borrow().draw(cr);
+            raterm::trace!("drawn");
             glib::Propagation::Stop
         });
     }
@@ -420,6 +437,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             if let Some(m) = update.modes {
                 *modes.lock().unwrap() = m;
             }
+            raterm::trace!("request");
             redraw.request();
         });
         let _ = title_proxy.send_event(UserEvent::Exit);
@@ -446,9 +464,11 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         *control_flow = ControlFlow::Wait;
         match event {
             Event::UserEvent(UserEvent::Redraw) => {
+                raterm::trace!("event");
                 let mut v = view.borrow_mut();
                 v.redraw.pending.store(false, Ordering::Release);
                 v.layout();
+                raterm::trace!("laid");
             }
             Event::WindowEvent {
                 event: WindowEvent::Focused(focused),

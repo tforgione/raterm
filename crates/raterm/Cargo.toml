@@ -17,3 +17,7 @@ tao = "0.37"
 toml = "1"
 # The web views of rich blocks; 2.40 for evaluate_javascript.
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
+
+[features]
+# Timestamps of the stages of a redraw, for extra/bench/trace.py.
+trace = []

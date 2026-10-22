@@ -96,6 +96,19 @@ def inner(ctl):
                 rows, cols = 5, 12
                 top, left = size.lines // 2 - 1, size.columns // 2 - 5
                 paint(LATENCY_COLORS[int(args[0])], rows, cols, top, left)
+            elif cmd == "code":
+                # A screen of colored words, for latency over a full screen.
+                rnd = random.Random(1)
+                words = ["fn", "let", "mut", "self", "match", "Some", "impl", "pub", "if", "else", "=>", "{", "}", "value"]
+                out = "\x1b[?25l"
+                for r in range(size.lines):
+                    out += f"\x1b[{r + 1};1H"
+                    n = 0
+                    while n + 7 < size.columns:
+                        w = rnd.choice(words)
+                        out += f"\x1b[38;5;{rnd.choice([1, 2, 3, 4, 5, 6, 9, 12, 14, 208])}m{w} "
+                        n += len(w) + 1
+                write(out + "\x1b[0m")
             elif cmd == "blocks":
                 # Small Markdown blocks, two rows each, as raterm's OSC 7117.
                 for i in range(int(args[0])):

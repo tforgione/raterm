@@ -88,6 +88,7 @@ impl Session {
         thread::spawn(move || {
             let mut buf = vec![0; READ];
             while let Ok(n @ 1..) = reader.read(&mut buf) {
+                crate::trace!("read {n}");
                 if tx.send(buf[..n].to_vec()).is_err() {
                     break;
                 }
@@ -100,7 +101,9 @@ impl Session {
                 batch.extend(more);
             }
             let mut term = self.term.lock().unwrap();
+            crate::trace!("advance {}", batch.len());
             let update = term.advance(&batch);
+            crate::trace!("advanced");
             self.dispatch(update, &mut emit);
         }
     }
