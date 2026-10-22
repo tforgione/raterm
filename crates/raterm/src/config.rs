@@ -84,6 +84,14 @@ pub enum CursorStyle {
 #[serde(default, deny_unknown_fields)]
 pub struct Window {
     pub decorations: bool,
+    /// Opacity of the default background, from 0 to 1.
+    pub opacity: f64,
+}
+
+impl Window {
+    pub fn opacity(&self) -> f64 {
+        self.opacity.clamp(0.0, 1.0)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -174,7 +182,10 @@ impl Default for Cursor {
 
 impl Default for Window {
     fn default() -> Self {
-        Window { decorations: true }
+        Window {
+            decorations: true,
+            opacity: 1.0,
+        }
     }
 }
 
@@ -245,6 +256,15 @@ mod tests {
                 send: "\x1b[5;2~".into()
             }
         );
+        assert_eq!(config.window.opacity(), 1.0);
+    }
+
+    #[test]
+    fn opacity_stays_between_0_and_1() {
+        let window = |text| Config::parse(text).unwrap().window;
+        assert_eq!(window("[window]\nopacity = 0.85").opacity(), 0.85);
+        assert_eq!(window("[window]\nopacity = 2.0").opacity(), 1.0);
+        assert_eq!(window("[window]\ndecorations = false").opacity(), 1.0);
     }
 
     #[test]

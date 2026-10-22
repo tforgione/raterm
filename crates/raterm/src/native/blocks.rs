@@ -198,8 +198,9 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             // height) still can, from the API.
             settings.set_enable_javascript_markup(false);
         }
-        // Opaque: WebKit repaints only what changes (a selection), and a
-        // transparent view lost the rest of the block.
+        // Opaque, even when the window is not: WebKit repaints only what
+        // changes (a selection) over what was there, and a translucent or
+        // transparent view lost the rest of the block or built it up.
         let bg = |shift: u32| ((theme().bg >> shift) & 0xff) as f64 / 255.0;
         view.set_background_color(&gdk::RGBA::new(bg(16), bg(8), bg(0), 1.0));
         view.set_can_focus(false);

@@ -126,8 +126,12 @@ fn regional(text: &str) -> bool {
 
 impl View {
     pub(super) fn draw(&self, cr: &cairo::Context) {
-        set_color(cr, theme().bg, 1.0);
+        // Replaces what was there: painted over, a translucent background
+        // would build up.
+        set_color(cr, theme().bg, self.config.window.opacity());
+        cr.set_operator(cairo::Operator::Source);
         let _ = cr.paint();
+        cr.set_operator(cairo::Operator::Over);
         let style = self.area.style_context();
         self.session.read(|term| {
             let visuals = self.visuals(term);

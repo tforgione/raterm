@@ -151,6 +151,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let window = WindowBuilder::new()
         .with_title(&title)
         .with_decorations(config.window.decorations)
+        .with_transparent(config.window.opacity() < 1.0)
         .build(&event_loop)?;
 
     let area = gtk::DrawingArea::new();
