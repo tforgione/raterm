@@ -2,9 +2,9 @@ use std::io::Read;
 use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 
-use crate::config::Config;
+use crate::config::{Config, CursorStyle};
 use crate::pty::{Error, Pty};
-use crate::term::{Terminal, Update};
+use crate::term::{CursorShape, Terminal, Update};
 
 /// A shell running in a pty, wired to the terminal state.
 ///
@@ -28,6 +28,12 @@ impl Session {
         let mut term = Terminal::new(cols, rows);
         term.bold_is_bright = config.bold_is_bright;
         term.history.cap = config.scrollback;
+        let shape = match config.cursor.style {
+            CursorStyle::Block => CursorShape::Block,
+            CursorStyle::Bar => CursorShape::Beam,
+            CursorStyle::Underline => CursorShape::Underline,
+        };
+        term.set_default_cursor(shape, config.cursor.blink);
         let session = Session {
             pty: Mutex::new(pty),
             term: Mutex::new(term),

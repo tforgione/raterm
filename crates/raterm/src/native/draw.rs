@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use gtk::{cairo, pango};
-use raterm::config::{self, CursorStyle};
-use raterm::term::{Attrs, Line, Run, Terminal, Tint};
+use raterm::config;
+use raterm::term::{Attrs, CursorShape, Line, Run, Terminal, Tint};
 
 use super::{PAD_X, PAD_Y, View, Visual};
 
@@ -153,22 +153,27 @@ impl View {
             selected: self.selection.and_then(|s| s.cells_of(term, at)),
             found,
             current,
-            cursor: has_cursor.then(|| self.cursor_look()),
+            cursor: has_cursor.then(|| self.cursor_look(term)),
         }
     }
 
     /// How the cursor looks now: hollow without the focus, as in other
     /// terminals, and away half of the time when it blinks.
-    pub(super) fn cursor_look(&self) -> Look {
-        if !self.focused.get() {
+    fn cursor_look(&self, term: &Terminal) -> Look {
+        let (shape, blinks) = term.cursor();
+        if shape == CursorShape::Hidden {
+            Look::Hidden
+        } else if !self.focused.get() {
             Look::Hollow
-        } else if !self.blink_on.get() {
+        } else if blinks && !self.blink_on.get() {
             Look::Hidden
         } else {
-            match self.config.cursor.style {
-                CursorStyle::Block => Look::Block,
-                CursorStyle::Bar => Look::Bar,
-                CursorStyle::Underline => Look::Underline,
+            match shape {
+                CursorShape::Block => Look::Block,
+                CursorShape::Beam => Look::Bar,
+                CursorShape::Underline => Look::Underline,
+                CursorShape::HollowBlock => Look::Hollow,
+                CursorShape::Hidden => Look::Hidden,
             }
         }
     }

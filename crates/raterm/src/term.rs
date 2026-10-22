@@ -6,7 +6,8 @@ use alacritty_terminal::index::Line as GridLine;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
+pub use alacritty_terminal::vte::ansi::CursorShape;
+use alacritty_terminal::vte::ansi::{Color, CursorStyle, NamedColor, Processor};
 use serde::Serialize;
 
 use crate::history::{self, Entry, History};
@@ -234,6 +235,23 @@ impl Terminal {
             stale: true,
             alt: false,
         }
+    }
+
+    /// The cursor of the configuration, which programs go back to with
+    /// `CSI 0 q`.
+    pub fn set_default_cursor(&mut self, shape: CursorShape, blinking: bool) {
+        self.term.set_options(Config {
+            scrolling_history: HISTORY,
+            default_cursor_style: CursorStyle { shape, blinking },
+            ..Config::default()
+        });
+    }
+
+    /// The shape of the cursor and whether it blinks, as configured or as a
+    /// program set them (DECSCUSR).
+    pub fn cursor(&self) -> (CursorShape, bool) {
+        let style = self.term.cursor_style();
+        (style.shape, style.blinking)
     }
 
     pub fn advance(&mut self, bytes: &[u8]) -> Update {
@@ -898,6 +916,18 @@ mod tests {
         let runs = units(&mut term, "👩\u{200d}💻x".as_bytes());
         let expected = [("👩\u{200d}💻", 4), ("x", 0)];
         assert_eq!(runs[..2], expected.map(|(t, n)| (t.to_owned(), n)));
+    }
+
+    #[test]
+    fn programs_change_the_cursor() {
+        let mut term = Terminal::new(10, 1);
+        term.set_default_cursor(CursorShape::Underline, true);
+        assert_eq!(term.cursor(), (CursorShape::Underline, true));
+        // As vim in insert mode: a steady bar.
+        term.advance(b"\x1b[6 q");
+        assert_eq!(term.cursor(), (CursorShape::Beam, false));
+        term.advance(b"\x1b[0 q");
+        assert_eq!(term.cursor(), (CursorShape::Underline, true));
     }
 
     #[test]

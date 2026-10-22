@@ -425,13 +425,17 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let _ = title_proxy.send_event(UserEvent::Exit);
     });
 
-    if config.cursor.blink {
+    {
+        // Programs can make the cursor blink (DECSCUSR), whatever the
+        // configuration says.
         let view = Rc::downgrade(&view);
         glib::timeout_add_local(std::time::Duration::from_millis(530), move || {
             let Some(view) = view.upgrade() else {
                 return glib::ControlFlow::Break;
             };
-            if let Ok(v) = view.try_borrow() {
+            if let Ok(v) = view.try_borrow()
+                && v.session.read(|term| term.cursor().1)
+            {
                 v.blink_on.set(!v.blink_on.get());
                 v.invalidate();
             }
