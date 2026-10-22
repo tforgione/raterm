@@ -22,7 +22,7 @@ use raterm::history::Entry;
 use raterm::pty::Error;
 use raterm::rich::Rendered;
 use raterm::session::Session;
-use raterm::term::{Event as TermEvent, Line, Modes, Terminal};
+use raterm::term::{Line, Modes, Terminal};
 use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
@@ -392,15 +392,12 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let pump = session.clone();
     let title_proxy = proxy.clone();
     thread::spawn(move || {
-        pump.pump(reader, |events| {
-            for event in &events {
-                match event {
-                    TermEvent::Title { title } => {
-                        let _ = title_proxy.send_event(UserEvent::Title(title.clone()));
-                    }
-                    TermEvent::Mode(m) => *modes.lock().unwrap() = *m,
-                    _ => {}
-                }
+        pump.pump(reader, |update| {
+            if let Some(title) = update.title {
+                let _ = title_proxy.send_event(UserEvent::Title(title));
+            }
+            if let Some(m) = update.modes {
+                *modes.lock().unwrap() = m;
             }
             redraw.request();
         });
@@ -667,8 +664,8 @@ impl View {
             search.set_query(&query);
         }
         let from = search.current.map(|(at, start, _)| (at, start));
-        let event = self.session.read(|t| t.search(&query, from, backwards));
-        let found = search.found(event);
+        let found = self.session.read(|t| t.search(&query, from, backwards));
+        let found = search.found(found);
         let style = self.search_entry.style_context();
         if found || query.is_empty() {
             style.remove_class("none");

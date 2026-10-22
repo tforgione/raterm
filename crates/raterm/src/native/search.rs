@@ -2,7 +2,7 @@
 //! flow (`Terminal::search`), the view shows them and scrolls to the current
 //! one.
 
-use raterm::term::{Event, Line};
+use raterm::term::{Found, Line};
 
 use super::select::chars;
 
@@ -33,16 +33,9 @@ impl Search {
     }
 
     /// Takes the core's answer; false when nothing matched.
-    pub(super) fn found(&mut self, event: Event) -> bool {
-        self.current = match event {
-            Event::Found {
-                entry: Some(at),
-                start,
-                end,
-            } => Some((at, start, end)),
-            _ => None,
-        };
-        self.current.is_some()
+    pub(super) fn found(&mut self, found: Option<Found>) -> bool {
+        self.current = found;
+        found.is_some()
     }
 
     /// The cells of the matches in a line, and which of them is the current

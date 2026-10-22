@@ -1,9 +1,9 @@
 //! Times the core on a flood: `cat`s each file in a pty and pumps it through
-//! the terminal and the JSON encoding, as the window would, without one.
+//! the terminal, as the window would, without one.
 //!
 //!     cargo run --release --example flood -- [--size COLSxROWS] FILE...
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use raterm::config::Config;
 use raterm::session::Session;
@@ -23,19 +23,12 @@ fn main() {
     for file in &args {
         let command = ["cat".to_owned(), file.clone()];
         let (session, reader) = Session::spawn(&config, &command, cols, rows).unwrap();
-        let (mut batches, mut json, mut encode) = (0, 0, Duration::ZERO);
+        let mut batches = 0;
         let start = Instant::now();
-        session.pump(reader, |events| {
-            let t = Instant::now();
-            json += serde_json::to_string(&events).unwrap().len();
-            encode += t.elapsed();
-            batches += 1;
-        });
+        session.pump(reader, |_| batches += 1);
         println!(
-            "{file}: {:.3} s, {batches} batches, {:.1} MiB of JSON encoded in {:.3} s",
-            start.elapsed().as_secs_f64(),
-            json as f64 / (1 << 20) as f64,
-            encode.as_secs_f64(),
+            "{file}: {:.3} s, {batches} batches",
+            start.elapsed().as_secs_f64()
         );
     }
 }

@@ -1,5 +1,5 @@
 //! Replays recorded pty sessions (`tests/data/*.in`, see `record.sh`) and
-//! compares the final screen and emitted events with `*.out`.
+//! compares the final screen and scrollback, styles included, with `*.out`.
 //! Run with `RATERM_UPDATE_SNAPSHOTS=1` to rewrite the snapshots.
 
 use std::fs;
@@ -9,15 +9,21 @@ use raterm::term::Terminal;
 
 fn replay(input: &[u8]) -> String {
     let mut term = Terminal::new(80, 24);
-    let mut events = String::new();
-    // Fixed chunk size keeps batching, hence events, deterministic.
+    // A fixed chunk size keeps the batches deterministic.
     for chunk in input.chunks(256) {
-        for event in term.advance(chunk).events {
-            events += &serde_json::to_string(&event).unwrap();
-            events.push('\n');
-        }
+        term.advance(chunk);
     }
-    format!("{}--- events\n{events}", term.text())
+    let mut out = term.text() + "--- scrollback\n";
+    for n in term.history.first()..term.history.next() {
+        out += &serde_json::to_string(term.history.get(n).unwrap()).unwrap();
+        out.push('\n');
+    }
+    out += "--- screen\n";
+    for line in term.screen() {
+        out += &serde_json::to_string(line).unwrap();
+        out.push('\n');
+    }
+    out
 }
 
 #[test]

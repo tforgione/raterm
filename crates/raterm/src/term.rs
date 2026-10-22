@@ -9,9 +9,9 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 use serde::Serialize;
 
-use crate::history::{self, Entry, History, Numbered, WINDOW};
+use crate::history::{self, Entry, History};
 use crate::media::Media;
-use crate::rich::{Block, Filter, Piece, Rendered};
+use crate::rich::{Block, Filter, Piece};
 
 /// History is drained every `CHUNK` bytes, so it only needs to hold the lines
 /// that can scroll out meanwhile (one per byte, more with `CSI S`).
@@ -22,57 +22,7 @@ const HISTORY: usize = 1 << 16;
 /// often keeps them for reuse.
 const CHUNK: usize = 1000;
 
-#[derive(Serialize, Debug, PartialEq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum Event {
-    /// Rows of the visible screen that changed, and its current height.
-    Lines {
-        height: usize,
-        rows: Vec<Row>,
-    },
-    /// A row that left the main screen by the top, to append to the
-    /// scrollback as `entry`; a soft-wrapped line continues the same entry.
-    ScrollOut {
-        entry: u64,
-        line: Line,
-    },
-    Alt {
-        on: bool,
-    },
-    /// Modes that change how the view encodes input.
-    Mode(Modes),
-    /// Window title set by the program (OSC 0/2); empty to reset it.
-    Title {
-        title: String,
-    },
-    /// A rich block, inserted in the flow before the screen as `entry`, or
-    /// replacing that entry, a block with the same id.
-    Block {
-        entry: u64,
-        #[serde(flatten)]
-        block: Rendered,
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        replace: bool,
-    },
-    /// Entries kept in the scrollback: `first..next`.
-    History {
-        first: u64,
-        next: u64,
-    },
-    /// Entries of the scrollback the page asked for.
-    Entries {
-        entries: Vec<Numbered>,
-    },
-    /// Next match of a search: an entry of the scrollback, or `next + y` for
-    /// row `y` of the screen; `None` when there is none.
-    Found {
-        entry: Option<u64>,
-        start: usize,
-        end: usize,
-    },
-}
-
-#[derive(Serialize, Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Modes {
     /// Arrow keys send `ESC O` sequences.
     pub app_cursor: bool,
@@ -101,13 +51,6 @@ impl Modes {
             alt_scroll: mode.contains(TermMode::ALTERNATE_SCROLL),
         }
     }
-}
-
-#[derive(Serialize, Debug, PartialEq)]
-pub struct Row {
-    pub y: usize,
-    #[serde(flatten)]
-    pub line: Line,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, Default)]
@@ -151,12 +94,24 @@ impl EventListener for Listener {
     }
 }
 
+/// What a batch of output changed, for the view; it reads the rest from the
+/// terminal's state.
 #[derive(Debug, Default)]
 pub struct Update {
-    pub events: Vec<Event>,
+    /// The screen or the scrollback changed: the view has to be drawn again.
+    pub changed: bool,
+    /// Window title set by the program (OSC 0/2); empty to reset it.
+    pub title: Option<String>,
+    /// The modes, when they changed.
+    pub modes: Option<Modes>,
     /// Bytes the terminal answers to the program (e.g. device status reports).
     pub reply: String,
 }
+
+/// A match of a search: an entry of the scrollback, or `next + y` for row `y`
+/// of the screen, and its start and end in the entry's text (UTF-16 units of
+/// the lowercased text).
+pub type Found = (u64, usize, usize);
 
 pub struct Terminal {
     /// Bold text in one of the 8 normal colors uses its bright variant.
@@ -168,12 +123,10 @@ pub struct Terminal {
     /// Local files shown by video blocks.
     pub media: Media,
     pub history: History,
-    /// Range of the history as last sent to the view.
-    sent_history: (u64, u64),
-    /// Screen as last sent to the view.
+    /// The screen as last rendered.
     screen: Vec<Line>,
     alt: bool,
-    /// Modes as last sent to the view.
+    /// The modes as last reported to the view.
     modes: Modes,
 }
 
@@ -188,7 +141,7 @@ impl Terminal {
         let term = Term::new(config, &size, Listener(tx));
         Terminal {
             bold_is_bright: false,
-            // The view starts from the same modes (see app.js).
+            // The view starts from the same modes.
             modes: Modes::of(term.mode()),
             term,
             parser: Processor::new(),
@@ -196,32 +149,31 @@ impl Terminal {
             filter: Filter::default(),
             media: Media::default(),
             history: History::default(),
-            sent_history: (0, 0),
             screen: Vec::new(),
             alt: false,
         }
     }
 
     pub fn advance(&mut self, bytes: &[u8]) -> Update {
-        let mut events = Vec::new();
+        let mut changed = false;
         for piece in self.filter.feed(bytes) {
             match piece {
                 Piece::Bytes(bytes) => {
                     for chunk in bytes.chunks(CHUNK) {
                         self.parser.advance(&mut self.term, chunk);
-                        self.drain_history(&mut events);
+                        changed |= self.drain_history();
                     }
                 }
-                Piece::Block(block) => self.insert(block, &mut events),
+                Piece::Block(block) => changed |= self.insert(block),
             }
         }
-        self.update(events)
+        self.update(changed)
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> Update {
         self.term
             .resize(TermSize::new(cols.max(1) as usize, rows.max(1) as usize));
-        self.update(Vec::new())
+        self.update(false)
     }
 
     /// Encodes pasted text, honoring bracketed paste mode.
@@ -243,19 +195,17 @@ impl Terminal {
         self.alt
     }
 
-    /// Entries `from..from + count` of the scrollback.
-    pub fn entries(&self, from: u64, count: usize) -> Event {
-        Event::Entries {
-            entries: self.history.slice(from, count),
-        }
-    }
-
     /// The match of `query` next to `from` (an entry and an offset in its
-    /// text, see `Event::Found`), going backwards or forwards over the lines
+    /// text, see `Found`), going backwards or forwards over the lines
     /// and blocks of the scrollback and the lines of the screen, and wrapping
     /// around. Without `from`,
     /// starts from the end, or from the beginning forwards.
-    pub fn search(&self, query: &str, from: Option<(u64, usize)>, backwards: bool) -> Event {
+    pub fn search(
+        &self,
+        query: &str,
+        from: Option<(u64, usize)>,
+        backwards: bool,
+    ) -> Option<Found> {
         let needle = query.to_lowercase();
         let (first, next) = (self.history.first(), self.history.next());
         let end = next + self.screen.len() as u64;
@@ -302,18 +252,10 @@ impl Terminal {
                 found.into_iter().find(ok)
             };
             if let Some((start, end)) = found {
-                return Event::Found {
-                    entry: Some(first + i),
-                    start,
-                    end,
-                };
+                return Some((first + i, start, end));
             }
         }
-        Event::Found {
-            entry: None,
-            start: 0,
-            end: 0,
-        }
+        None
     }
 
     /// Screen content as plain text, for tests.
@@ -326,22 +268,22 @@ impl Terminal {
 
     /// Inserts a block at the cursor: everything above it moves to the
     /// scrollback, the block follows, and the cursor starts the next line.
-    fn insert(&mut self, block: Block, events: &mut Vec<Event>) {
+    /// False when nothing changed.
+    fn insert(&mut self, block: Block) -> bool {
         if self.term.mode().contains(TermMode::ALT_SCREEN) {
-            return;
+            return false;
         }
         let old = block.id.as_ref().and_then(|id| self.history.block(id));
         let block = match block.render(&self.media) {
             Ok(block) => block,
-            Err(e) => return eprintln!("raterm: invalid rich block: {e}"),
+            Err(e) => {
+                eprintln!("raterm: invalid rich block: {e}");
+                return false;
+            }
         };
         if let Some(entry) = old {
-            self.history.replace(entry, Entry::Block(block.clone()));
-            return events.push(Event::Block {
-                entry,
-                block,
-                replace: true,
-            });
+            self.history.replace(entry, Entry::Block(block));
+            return true;
         }
         if self.term.grid().cursor.point.column.0 > 0 {
             self.parser.advance(&mut self.term, b"\r\n");
@@ -351,46 +293,41 @@ impl Terminal {
             let scroll = format!("\x1b[{y}S\x1b[H");
             self.parser.advance(&mut self.term, scroll.as_bytes());
         }
-        self.drain_history(events);
-        let entry = self.history.push(Entry::Block(block.clone()));
-        events.push(Event::Block {
-            entry,
-            block,
-            replace: false,
-        });
+        self.drain_history();
+        self.history.push(Entry::Block(block));
+        true
     }
 
-    /// Moves the rows that scrolled out of the main screen to the scrollback,
-    /// and emits them.
+    /// Moves the rows that scrolled out of the main screen to the scrollback;
+    /// false when there were none.
     ///
     /// The alternate grid has no history, so this only ever drains the main
     /// screen; lines pushed while the alternate screen is active show up on
     /// exit, which is still the right place in the flow.
-    fn drain_history(&mut self, events: &mut Vec<Event>) {
+    fn drain_history(&mut self) -> bool {
         let grid = self.term.grid();
         let rows: Vec<Line> = (1..=grid.history_size() as i32)
             .rev()
             .map(|i| self.render(&grid[GridLine(-i)], None))
             .collect();
         self.term.grid_mut().clear_history();
-        events.extend(rows.into_iter().map(|line| Event::ScrollOut {
-            entry: self.history.push_row(line.clone()),
-            line,
-        }));
+        let drained = !rows.is_empty();
+        for row in rows {
+            self.history.push_row(row);
+        }
+        drained
     }
 
-    fn update(&mut self, events: Vec<Event>) -> Update {
+    fn update(&mut self, changed: bool) -> Update {
         let mut update = Update {
-            events,
-            reply: String::new(),
+            changed,
+            ..Update::default()
         };
         for event in self.term_events.try_iter() {
             match event {
                 TermEvent::PtyWrite(text) => update.reply.push_str(&text),
-                TermEvent::Title(title) => update.events.push(Event::Title { title }),
-                TermEvent::ResetTitle => update.events.push(Event::Title {
-                    title: String::new(),
-                }),
+                TermEvent::Title(title) => update.title = Some(title),
+                TermEvent::ResetTitle => update.title = Some(String::new()),
                 _ => {}
             }
         }
@@ -399,46 +336,28 @@ impl Terminal {
         let alt = mode.contains(TermMode::ALT_SCREEN);
         if alt != self.alt {
             self.alt = alt;
-            self.screen.clear();
-            update.events.push(Event::Alt { on: alt });
+            update.changed = true;
         }
         let modes = Modes::of(&mode);
         if modes != self.modes {
             self.modes = modes;
-            update.events.push(Event::Mode(modes));
+            update.modes = Some(modes);
         }
 
-        self.drain_history(&mut update.events);
-        trim(&mut update.events);
-
+        update.changed |= self.drain_history();
         let grid = self.term.grid();
         let cursor = mode
             .contains(TermMode::SHOW_CURSOR)
             .then_some(grid.cursor.point);
-        let height = grid.screen_lines();
-        let mut rows = Vec::new();
-        let screen: Vec<Line> = (0..height)
+        let screen: Vec<Line> = (0..grid.screen_lines())
             .map(|y| {
                 let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
-                let line = self.render(&grid[GridLine(y as i32)], x);
-                if self.screen.get(y) != Some(&line) {
-                    rows.push(Row {
-                        y,
-                        line: line.clone(),
-                    });
-                }
-                line
+                self.render(&grid[GridLine(y as i32)], x)
             })
             .collect();
-        if !rows.is_empty() || height != self.screen.len() {
-            update.events.push(Event::Lines { height, rows });
-        }
-        self.screen = screen;
-        let range = (self.history.first(), self.history.next());
-        if range != self.sent_history {
-            self.sent_history = range;
-            let (first, next) = range;
-            update.events.push(Event::History { first, next });
+        if screen != self.screen {
+            self.screen = screen;
+            update.changed = true;
         }
         update
     }
@@ -567,24 +486,6 @@ impl Terminal {
     }
 }
 
-/// Leaves out the entries that `events` add to the scrollback before the last
-/// `WINDOW` of them: the page would drop them before showing them.
-pub fn trim(events: &mut Vec<Event>) {
-    let added = |e: &Event| match *e {
-        Event::ScrollOut { entry, .. }
-        | Event::Block {
-            entry,
-            replace: false,
-            ..
-        } => Some(entry),
-        _ => None,
-    };
-    let Some(newest) = events.iter().filter_map(added).max() else {
-        return;
-    };
-    events.retain(|e| added(e).is_none_or(|entry| entry + WINDOW as u64 > newest));
-}
-
 /// Cell ranges of the http(s) URLs written in a line.
 fn find_urls(chars: &[char]) -> Vec<(usize, usize)> {
     let starts_with = |x: usize, prefix: &str| {
@@ -677,12 +578,12 @@ fn hex(r: u8, g: u8, b: u8) -> String {
 mod tests {
     use super::*;
 
-    fn scrolled(events: &[Event]) -> Vec<String> {
-        events
-            .iter()
-            .filter_map(|e| match e {
-                Event::ScrollOut { line, .. } => Some(line.text()),
-                _ => None,
+    /// The texts of the entries of the scrollback, "block" for blocks.
+    fn scrollback(term: &Terminal) -> Vec<String> {
+        (term.history.first()..term.history.next())
+            .map(|n| match term.history.get(n) {
+                Some(Entry::Line(line)) => line.text(),
+                _ => "block".into(),
             })
             .collect()
     }
@@ -690,34 +591,28 @@ mod tests {
     #[test]
     fn lines_scroll_out_once_in_order() {
         let mut term = Terminal::new(10, 2);
-        let update = term.advance(b"a\r\nb\r\nc\r\nd");
-        assert_eq!(scrolled(&update.events), ["a", "b"]);
+        assert!(term.advance(b"a\r\nb\r\nc\r\nd").changed);
+        assert_eq!(scrollback(&term), ["a", "b"]);
         assert_eq!(term.text(), "c\nd\n");
-        assert!(scrolled(&term.advance(b"e").events).is_empty());
+        term.advance(b"e");
+        assert_eq!(scrollback(&term), ["a", "b"]);
     }
 
     #[test]
-    fn only_changed_rows_are_sent() {
+    fn only_changes_ask_for_a_redraw() {
         let mut term = Terminal::new(10, 3);
         term.advance(b"one\r\ntwo");
-        let update = term.advance(b"!");
-        let [Event::Lines { rows, .. }] = &update.events[..] else {
-            panic!("{:?}", update.events)
-        };
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].y, 1);
+        assert!(!term.advance(b"\x1b[0m").changed);
+        assert!(term.advance(b"!").changed);
         // The trailing space is the cursor cell.
-        assert_eq!(rows[0].line.text(), "two! ");
+        assert_eq!(term.screen()[1].text(), "two! ");
     }
 
     #[test]
     fn colors_and_cursor() {
         let mut term = Terminal::new(10, 1);
-        let update = term.advance(b"\x1b[1;31mA\x1b[38;5;196mB\x1b[38;2;1;2;3mC\x1b[0m");
-        let [Event::Lines { rows, .. }] = &update.events[..] else {
-            panic!()
-        };
-        let styles: Vec<_> = rows[0].line.runs.iter().map(|r| &r.style).collect();
+        term.advance(b"\x1b[1;31mA\x1b[38;5;196mB\x1b[38;2;1;2;3mC\x1b[0m");
+        let styles: Vec<_> = term.screen()[0].runs.iter().map(|r| &r.style).collect();
         assert_eq!(styles[0].fg.as_deref(), Some("var(--c1)"));
         assert_eq!(styles[0].class, "b");
         assert_eq!(styles[1].fg.as_deref(), Some("#ff0000"));
@@ -729,41 +624,30 @@ mod tests {
     fn alt_screen_round_trip() {
         let mut term = Terminal::new(10, 2);
         term.advance(b"shell");
-        let on = term.advance(b"\x1b[?1049hvim");
-        assert_eq!(on.events[0], Event::Alt { on: true });
-        let off = term.advance(b"\x1b[?1049l");
-        assert_eq!(off.events[0], Event::Alt { on: false });
+        assert!(term.advance(b"\x1b[?1049hvim").changed);
+        assert!(term.alt_screen());
+        term.advance(b"\x1b[?1049l");
+        assert!(!term.alt_screen());
         assert_eq!(term.text(), "shell\n\n");
     }
 
     #[test]
     fn soft_wrap_is_flagged() {
         let mut term = Terminal::new(4, 1);
-        let update = term.advance(b"abcdef");
-        let [Event::ScrollOut { line, .. }, ..] = &update.events[..] else {
+        term.advance(b"abcdef");
+        let Some(Entry::Line(line)) = term.history.get(0) else {
             panic!()
         };
         assert!(line.wrap);
         assert_eq!(line.text(), "abcd");
     }
 
-    fn kinds(events: &[Event]) -> Vec<String> {
-        events
-            .iter()
-            .filter_map(|e| match e {
-                Event::ScrollOut { line, .. } => Some(line.text()),
-                Event::Block { replace, .. } => Some(format!("block {replace}")),
-                _ => None,
-            })
-            .collect()
-    }
-
     #[test]
     fn block_lands_after_output_above_cursor() {
         let mut term = Terminal::new(10, 4);
         // "PGI+" is base64 for "<b>".
-        let update = term.advance(b"one\r\ntwo\x1b]7117;html;PGI+\x07$ ");
-        assert_eq!(kinds(&update.events), ["one", "two", "block false"]);
+        term.advance(b"one\r\ntwo\x1b]7117;html;PGI+\x07$ ");
+        assert_eq!(scrollback(&term), ["one", "two", "block"]);
         assert_eq!(term.text(), "$\n\n\n\n");
     }
 
@@ -771,16 +655,21 @@ mod tests {
     fn block_with_known_id_is_replaced_in_place() {
         let mut term = Terminal::new(10, 4);
         term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
-        let update = term.advance(b"x\x1b]7117;html;id=p;PGI+\x07");
-        assert_eq!(kinds(&update.events), ["block true"]);
+        // "PGk+" is base64 for "<i>".
+        assert!(term.advance(b"x\x1b]7117;html;id=p;PGk+\x07").changed);
+        assert_eq!(scrollback(&term), ["block"]);
+        let Some(Entry::Block(block)) = term.history.get(0) else {
+            panic!()
+        };
+        assert_eq!(block.content, "<i>");
         assert_eq!(term.text(), "x\n\n\n\n");
     }
 
     #[test]
     fn blocks_are_ignored_on_alt_screen() {
         let mut term = Terminal::new(10, 2);
-        let update = term.advance(b"\x1b[?1049h\x1b]7117;html;PGI+\x07x");
-        assert_eq!(kinds(&update.events), Vec::<String>::new());
+        term.advance(b"\x1b[?1049h\x1b]7117;html;PGI+\x07x");
+        assert!(scrollback(&term).is_empty());
         assert_eq!(term.text(), "x\n\n");
     }
 
@@ -788,11 +677,9 @@ mod tests {
     fn mouse_modes_are_reported() {
         let mut term = Terminal::new(10, 2);
         term.advance(b"x");
-        let update = term.advance(b"\x1b[?1002h\x1b[?1006h");
-        let [Event::Mode(modes), ..] = &update.events[..] else {
-            panic!("{:?}", update.events)
-        };
+        let modes = term.advance(b"\x1b[?1002h\x1b[?1006h").modes.unwrap();
         assert_eq!((modes.mouse, modes.sgr_mouse), (2, true));
+        assert_eq!(term.advance(b"y").modes, None);
     }
 
     #[test]
@@ -810,12 +697,8 @@ mod tests {
     }
 
     fn links(term: &mut Terminal, bytes: &[u8]) -> Vec<(String, Option<String>)> {
-        let update = term.advance(bytes);
-        let Some(Event::Lines { rows, .. }) = update.events.last() else {
-            panic!()
-        };
-        rows[0]
-            .line
+        term.advance(bytes);
+        term.screen()[0]
             .runs
             .iter()
             .map(|r| (r.text.clone(), r.style.link.clone()))
@@ -848,71 +731,20 @@ mod tests {
     fn bold_is_bright() {
         let mut term = Terminal::new(10, 1);
         term.bold_is_bright = true;
-        let update = term.advance(b"\x1b[1;31mA");
-        let [Event::Lines { rows, .. }] = &update.events[..] else {
-            panic!()
-        };
-        assert_eq!(rows[0].line.runs[0].style.fg.as_deref(), Some("var(--c9)"));
+        term.advance(b"\x1b[1;31mA");
+        assert_eq!(
+            term.screen()[0].runs[0].style.fg.as_deref(),
+            Some("var(--c9)")
+        );
     }
 
     #[test]
     fn scrollback_entries_are_numbered_and_kept() {
         let mut term = Terminal::new(4, 1);
-        let update = term.advance(b"abcdef\r\ng\r\nh");
-        let entries: Vec<u64> = update
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                Event::ScrollOut { entry, .. } => Some(*entry),
-                _ => None,
-            })
-            .collect();
+        term.advance(b"abcdef\r\ng\r\nh");
         // "abcd" soft-wraps: "ef" continues entry 0.
-        assert_eq!(entries, [0, 0, 1]);
-        assert_eq!(
-            update.events.last(),
-            Some(&Event::History { first: 0, next: 2 })
-        );
-        let Event::Entries { entries } = term.entries(0, 10) else {
-            panic!()
-        };
-        let texts: Vec<_> = entries
-            .iter()
-            .map(|e| match &e.item {
-                Entry::Line(line) => line.text(),
-                Entry::Block(_) => panic!(),
-            })
-            .collect();
-        assert_eq!(texts, ["abcdef", "g"]);
-    }
-
-    #[test]
-    fn a_flood_sends_only_the_last_window() {
-        let mut term = Terminal::new(10, 1);
-        let flood = "x\r\n".repeat(WINDOW + 10);
-        let update = term.advance(flood.as_bytes());
-        let sent: Vec<u64> = update
-            .events
-            .iter()
-            .filter_map(|e| match e {
-                Event::ScrollOut { entry, .. } => Some(*entry),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(sent.len(), WINDOW);
-        assert_eq!(sent[0], 10);
-        assert_eq!(term.history.next(), (WINDOW + 10) as u64);
-    }
-
-    #[test]
-    fn batches_put_together_keep_the_last_window() {
-        let mut term = Terminal::new(10, 1);
-        let mut events = term.advance(b"a\r\n").events;
-        events.extend(term.advance("x\r\n".repeat(WINDOW).as_bytes()).events);
-        trim(&mut events);
-        assert_eq!(scrolled(&events).len(), WINDOW);
-        assert!(scrolled(&events).iter().all(|text| text == "x"));
-        assert!(events.iter().any(|e| matches!(e, Event::History { .. })));
+        assert_eq!(scrollback(&term), ["abcdef", "g"]);
+        assert_eq!((term.history.first(), term.history.next()), (0, 2));
     }
 
     #[test]
@@ -921,18 +753,14 @@ mod tests {
         term.history.cap = Some(1);
         term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
         term.advance(b"a\r\nb\r\nc");
-        let update = term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
-        assert!(matches!(
-            update.events[..],
-            [.., Event::Block { replace: false, .. }, _, _]
-        ));
+        assert_eq!(term.history.block("p"), None);
+        term.advance(b"\x1b]7117;html;id=p;PGI+\x07");
+        let last = term.history.next() - 1;
+        assert_eq!(term.history.block("p"), Some(last));
     }
 
-    fn found(event: Event) -> Option<(u64, usize)> {
-        match event {
-            Event::Found { entry, start, .. } => entry.map(|n| (n, start)),
-            _ => panic!(),
-        }
+    fn found(found: Option<Found>) -> Option<(u64, usize)> {
+        found.map(|(n, start, _)| (n, start))
     }
 
     #[test]
@@ -963,47 +791,38 @@ mod tests {
         assert_eq!(found(term.search("b>", None, true)), None);
     }
 
+    fn units(term: &mut Terminal, bytes: &[u8]) -> Vec<(String, u8)> {
+        term.advance(bytes);
+        term.screen()[0]
+            .runs
+            .iter()
+            .map(|r| (r.text.clone(), r.cluster))
+            .collect()
+    }
+
     #[test]
     fn cells_with_combining_chars_are_runs_of_their_own() {
         let mut term = Terminal::new(10, 1);
-        let update = term.advance("ae\u{301}b".as_bytes());
-        let [Event::Lines { rows, .. }] = &update.events[..] else {
-            panic!()
-        };
-        let runs: Vec<_> = rows[0]
-            .line
-            .runs
-            .iter()
-            .map(|r| (r.text.as_str(), r.cluster))
-            .collect();
-        assert_eq!(runs[..3], [("a", 0), ("e\u{301}", 1), ("b", 0)]);
+        let runs = units(&mut term, "ae\u{301}b".as_bytes());
+        let expected = [("a", 0), ("e\u{301}", 1), ("b", 0)];
+        assert_eq!(runs[..3], expected.map(|(t, n)| (t.to_owned(), n)));
     }
 
     #[test]
     fn a_joiner_puts_the_next_char_in_the_same_unit() {
         let mut term = Terminal::new(10, 1);
-        let update = term.advance("👩\u{200d}💻x".as_bytes());
-        let [Event::Lines { rows, .. }] = &update.events[..] else {
-            panic!()
-        };
-        let runs: Vec<_> = rows[0]
-            .line
-            .runs
-            .iter()
-            .map(|r| (r.text.as_str(), r.cluster))
-            .collect();
-        assert_eq!(runs[..2], [("👩\u{200d}💻", 4), ("x", 0)]);
+        let runs = units(&mut term, "👩\u{200d}💻x".as_bytes());
+        let expected = [("👩\u{200d}💻", 4), ("x", 0)];
+        assert_eq!(runs[..2], expected.map(|(t, n)| (t.to_owned(), n)));
     }
 
     #[test]
     fn title_is_forwarded() {
         let mut term = Terminal::new(10, 1);
-        let update = term.advance(b"\x1b]0;vim\x07");
         assert_eq!(
-            update.events[0],
-            Event::Title {
-                title: "vim".into()
-            }
+            term.advance(b"\x1b]0;vim\x07").title.as_deref(),
+            Some("vim")
         );
+        assert_eq!(term.advance(b"x").title, None);
     }
 }

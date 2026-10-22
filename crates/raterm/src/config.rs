@@ -3,9 +3,9 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     /// Program started in the terminal; defaults to `$SHELL`.
@@ -29,7 +29,7 @@ pub struct Config {
 }
 
 /// The palette, as in alacritty; each color unset keeps the default theme's.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Colors {
     pub foreground: Option<Rgb>,
@@ -57,13 +57,7 @@ impl<'de> Deserialize<'de> for Rgb {
     }
 }
 
-impl Serialize for Rgb {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&format!("#{:06x}", self.0))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Font {
     pub family: String,
@@ -71,14 +65,14 @@ pub struct Font {
     pub size: f32,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Cursor {
     pub style: CursorStyle,
     pub blink: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CursorStyle {
     Block,
@@ -86,20 +80,20 @@ pub enum CursorStyle {
     Underline,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Window {
     pub decorations: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Images {
     /// Maximum height of image and SVG blocks, in lines; unlimited if unset.
     pub max_height: Option<u16>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Markdown {
     /// Width of the centered column of text, in columns; 0 for the whole
@@ -114,7 +108,7 @@ impl Default for Markdown {
 }
 
 /// Text of Markdown and HTML blocks; their code uses the terminal font.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Blocks {
     pub font_family: String,
@@ -131,7 +125,7 @@ impl Default for Blocks {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(untagged)]
 pub enum Binding {
     /// copy, paste, paste_selection, search, zoom_in, zoom_out, zoom_reset,
@@ -261,10 +255,6 @@ mod tests {
         .unwrap();
         assert_eq!(config.colors.foreground, Some(Rgb(0xeaeaea)));
         assert_eq!(config.colors.normal, [Rgb(0), Rgb(0xcd0000)]);
-        assert_eq!(
-            serde_json::to_string(&config.colors.foreground).unwrap(),
-            "\"#eaeaea\""
-        );
         assert!(Config::parse("[colors]\nbackground = \"red\"\n").is_err());
         assert!(Config::parse("[colors]\nbackground = \"#fff;}\"\n").is_err());
     }

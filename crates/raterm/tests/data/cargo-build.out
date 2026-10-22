@@ -22,6 +22,29 @@ s/rt-cat)
 
 
 
---- events
-{"type":"lines","height":24,"rows":[{"y":0,"runs":[{"text":"   Compiling","fg":"var(--c10)","class":"b"},{"text":" rt-cat v0.1.0 (/home/thomas/git/git.tforgione.fr/tforgione/rt/crate"}],"wrap":true},{"y":1,"runs":[{"text":"s/rt-cat)"}]},{"y":2,"runs":[{"text":"    Finished","fg":"var(--c10)","class":"b"},{"text":" `dev` profile [unoptimized + de"},{"text":" ","class":"cursor"}]},{"y":3,"runs":[]},{"y":4,"runs":[]},{"y":5,"runs":[]},{"y":6,"runs":[]},{"y":7,"runs":[]},{"y":8,"runs":[]},{"y":9,"runs":[]},{"y":10,"runs":[]},{"y":11,"runs":[]},{"y":12,"runs":[]},{"y":13,"runs":[]},{"y":14,"runs":[]},{"y":15,"runs":[]},{"y":16,"runs":[]},{"y":17,"runs":[]},{"y":18,"runs":[]},{"y":19,"runs":[]},{"y":20,"runs":[]},{"y":21,"runs":[]},{"y":22,"runs":[]},{"y":23,"runs":[]}]}
-{"type":"lines","height":24,"rows":[{"y":2,"runs":[{"text":"    Finished","fg":"var(--c10)","class":"b"},{"text":" `dev` profile [unoptimized + debuginfo] target(s) in 0.07s"}]},{"y":4,"runs":[{"text":" ","class":"cursor"}]}]}
+--- scrollback
+--- screen
+{"runs":[{"text":"   Compiling","fg":"var(--c10)","class":"b"},{"text":" rt-cat v0.1.0 (/home/thomas/git/git.tforgione.fr/tforgione/rt/crate"}],"wrap":true}
+{"runs":[{"text":"s/rt-cat)"}]}
+{"runs":[{"text":"    Finished","fg":"var(--c10)","class":"b"},{"text":" `dev` profile [unoptimized + debuginfo] target(s) in 0.07s"}]}
+{"runs":[]}
+{"runs":[{"text":" ","class":"cursor"}]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}

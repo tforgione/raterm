@@ -22,7 +22,29 @@ drwxr-xr-x   5 root root   4096 Oct 15 00:52 src
 
 
 
---- events
-{"type":"lines","height":24,"rows":[{"y":0,"runs":[{"text":"total 476"}]},{"y":1,"runs":[{"text":"drwxr-xr-x   6 root root 135168 Oct 20 11:59 "},{"text":"bin","fg":"var(--c4)","class":"b"}]},{"y":2,"runs":[{"text":"drwxr-xr-x 659 root root  45056 Oct 20 11:59 "},{"text":"include","fg":"var(--c4)","class":"b"}]},{"y":3,"runs":[{"text":"drwxr-xr-x 250 root root 270336 Oct 20 11:59 "},{"text":"lib","fg":"var(--c4)","class":"b"}]},{"y":4,"runs":[{"text":"drwxr-xr-x   2 root root   4096 Aug 16 17:02 "},{"text":" ","class":"cursor"}]},{"y":5,"runs":[]},{"y":6,"runs":[]},{"y":7,"runs":[]},{"y":8,"runs":[]},{"y":9,"runs":[]},{"y":10,"runs":[]},{"y":11,"runs":[]},{"y":12,"runs":[]},{"y":13,"runs":[]},{"y":14,"runs":[]},{"y":15,"runs":[]},{"y":16,"runs":[]},{"y":17,"runs":[]},{"y":18,"runs":[]},{"y":19,"runs":[]},{"y":20,"runs":[]},{"y":21,"runs":[]},{"y":22,"runs":[]},{"y":23,"runs":[]}]}
-{"type":"lines","height":24,"rows":[{"y":4,"runs":[{"text":"drwxr-xr-x   2 root root   4096 Aug 16 17:02 "},{"text":"lib32","fg":"var(--c4)","class":"b"}]},{"y":5,"runs":[{"text":"lrwxrwxrwx   1 root root      3 Oct 12  2025 "},{"text":"lib64","fg":"var(--c6)","class":"b"},{"text":" -> lib"}]},{"y":6,"runs":[{"text":"drwxr-xr-x  11 root root   4096 Apr 20  2025 "},{"text":"local","fg":"var(--c4)","class":"b"}]},{"y":7,"runs":[{"text":"lrwxrwxrwx   1 root root      3 Oct 12  2025 "},{"text":"sbin","fg":"var(--c6)","class":"b"},{"text":" -> bin"}]},{"y":8,"runs":[{"text":"drwxr-xr-x 285 root root  12288 Oct 20"},{"text":" ","class":"cursor"}]}]}
-{"type":"lines","height":24,"rows":[{"y":8,"runs":[{"text":"drwxr-xr-x 285 root root  12288 Oct 20 11:59 "},{"text":"share","fg":"var(--c4)","class":"b"}]},{"y":9,"runs":[{"text":"drwxr-xr-x   5 root root   4096 Oct 15 00:52 "},{"text":"src","fg":"var(--c4)","class":"b"}]},{"y":11,"runs":[{"text":" ","class":"cursor"}]}]}
+--- scrollback
+--- screen
+{"runs":[{"text":"total 476"}]}
+{"runs":[{"text":"drwxr-xr-x   6 root root 135168 Oct 20 11:59 "},{"text":"bin","fg":"var(--c4)","class":"b"}]}
+{"runs":[{"text":"drwxr-xr-x 659 root root  45056 Oct 20 11:59 "},{"text":"include","fg":"var(--c4)","class":"b"}]}
+{"runs":[{"text":"drwxr-xr-x 250 root root 270336 Oct 20 11:59 "},{"text":"lib","fg":"var(--c4)","class":"b"}]}
+{"runs":[{"text":"drwxr-xr-x   2 root root   4096 Aug 16 17:02 "},{"text":"lib32","fg":"var(--c4)","class":"b"}]}
+{"runs":[{"text":"lrwxrwxrwx   1 root root      3 Oct 12  2025 "},{"text":"lib64","fg":"var(--c6)","class":"b"},{"text":" -> lib"}]}
+{"runs":[{"text":"drwxr-xr-x  11 root root   4096 Apr 20  2025 "},{"text":"local","fg":"var(--c4)","class":"b"}]}
+{"runs":[{"text":"lrwxrwxrwx   1 root root      3 Oct 12  2025 "},{"text":"sbin","fg":"var(--c6)","class":"b"},{"text":" -> bin"}]}
+{"runs":[{"text":"drwxr-xr-x 285 root root  12288 Oct 20 11:59 "},{"text":"share","fg":"var(--c4)","class":"b"}]}
+{"runs":[{"text":"drwxr-xr-x   5 root root   4096 Oct 15 00:52 "},{"text":"src","fg":"var(--c4)","class":"b"}]}
+{"runs":[]}
+{"runs":[{"text":" ","class":"cursor"}]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}
+{"runs":[]}

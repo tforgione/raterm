@@ -4,12 +4,13 @@ use std::thread;
 
 use crate::config::Config;
 use crate::pty::{Error, Pty};
-use crate::term::{Event, Terminal, Update};
+use crate::term::{Terminal, Update};
 
 /// A shell running in a pty, wired to the terminal state.
 ///
-/// Events are emitted while the terminal is locked, so batches coming from the
-/// reader thread and from resizes reach the view in the order they were computed.
+/// Updates are emitted while the terminal is locked, so batches coming from
+/// the reader thread and from resizes reach the view in the order they were
+/// computed.
 pub struct Session {
     pty: Mutex<Pty>,
     term: Mutex<Terminal>,
@@ -58,12 +59,7 @@ impl Session {
         f(&self.term.lock().unwrap())
     }
 
-    /// Answers a request of the page about the terminal (the scrollback).
-    pub fn query(&self, ask: impl FnOnce(&Terminal) -> Event, emit: impl FnOnce(Vec<Event>)) {
-        emit(vec![ask(&self.term.lock().unwrap())]);
-    }
-
-    pub fn resize(&self, cols: u16, rows: u16, emit: impl FnOnce(Vec<Event>)) {
+    pub fn resize(&self, cols: u16, rows: u16, emit: impl FnOnce(Update)) {
         let mut term = self.term.lock().unwrap();
         let update = term.resize(cols, rows);
         if let Err(e) = self.pty.lock().unwrap().resize(cols, rows) {
@@ -76,8 +72,8 @@ impl Session {
     ///
     /// The pty hands out a flood 4 KiB at a time; reading on a thread of its
     /// own lets this one take all that is pending, up to `BATCH` bytes, so
-    /// that the screen is rendered and sent once per batch, not per read.
-    pub fn pump(&self, mut reader: Box<dyn Read + Send>, mut emit: impl FnMut(Vec<Event>)) {
+    /// that the screen is rendered once per batch, not per read.
+    pub fn pump(&self, mut reader: Box<dyn Read + Send>, mut emit: impl FnMut(Update)) {
         const READ: usize = 16 * 1024;
         const BATCH: usize = 64 * 1024;
         let (tx, rx) = mpsc::sync_channel(BATCH / READ);
@@ -101,12 +97,12 @@ impl Session {
         }
     }
 
-    fn dispatch(&self, update: Update, emit: impl FnOnce(Vec<Event>)) {
+    fn dispatch(&self, update: Update, emit: impl FnOnce(Update)) {
         if !update.reply.is_empty() {
             self.input(update.reply.as_bytes());
         }
-        if !update.events.is_empty() {
-            emit(update.events);
+        if update.changed || update.title.is_some() || update.modes.is_some() {
+            emit(update);
         }
     }
 }

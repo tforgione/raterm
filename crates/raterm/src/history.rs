@@ -1,5 +1,4 @@
-//! The scrollback, kept whole by the core: the page only holds a window of
-//! it, which it asks for as the user scrolls.
+//! The scrollback, kept whole by the core, unbounded by default.
 
 use std::collections::{HashMap, VecDeque};
 
@@ -8,24 +7,12 @@ use serde::Serialize;
 use crate::rich::{Kind, Rendered};
 use crate::term::Line;
 
-/// Entries the page holds at most, and the most the core sends at once: past
-/// about 10,000 lines in the DOM, every frame slows down.
-pub const WINDOW: usize = 5000;
-
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Entry {
     /// A logical line: the rows of a soft-wrapped line are joined.
     Line(Line),
     Block(Rendered),
-}
-
-/// An entry with its number, as sent to the page.
-#[derive(Serialize, Debug, PartialEq)]
-pub struct Numbered {
-    pub entry: u64,
-    #[serde(flatten)]
-    pub item: Entry,
 }
 
 #[derive(Default)]
@@ -91,18 +78,6 @@ impl History {
         let i = n.checked_sub(self.first)?;
         self.entries.get(usize::try_from(i).ok()?)
     }
-
-    /// Entries `from..from + count` that are kept, at most `WINDOW`.
-    pub fn slice(&self, from: u64, count: usize) -> Vec<Numbered> {
-        let from = from.max(self.first);
-        (from..self.next())
-            .take(count.min(WINDOW))
-            .map(|n| Numbered {
-                entry: n,
-                item: self.get(n).unwrap().clone(),
-            })
-            .collect()
-    }
 }
 
 /// The text a block is searched in: the source of Markdown, the text of HTML
@@ -135,7 +110,7 @@ pub fn block_text(block: &Rendered) -> Option<String> {
 }
 
 /// Positions of `needle` in `text`, ignoring case, in UTF-16 code units of
-/// the lowercased text, as the page counts them.
+/// the lowercased text, as WebKit counts them in blocks.
 pub fn matches(text: &str, needle: &str) -> Vec<(usize, usize)> {
     let text = text.to_lowercase();
     let units = |s: &str| s.encode_utf16().count();
@@ -191,8 +166,6 @@ mod tests {
         assert_eq!((history.first(), history.next()), (1, 3));
         assert_eq!(history.get(0), None);
         assert_eq!(text(&history, 2), "c");
-        let slice: Vec<u64> = history.slice(0, 10).iter().map(|e| e.entry).collect();
-        assert_eq!(slice, [1, 2]);
     }
 
     #[test]
