@@ -16,6 +16,7 @@ Never kills anything but the windows it opened, found by their unique title.
 """
 
 import argparse
+import base64
 import json
 import os
 import random
@@ -37,6 +38,8 @@ MARK, BLACK = (255, 0, 255), (0, 0, 0)
 # Scrollback sizes of the scrollback benchmark; alacritty stops at 100,000.
 TERMINALS = ["raterm", "gnome-terminal", "terminator", "alacritty"]
 SCROLLBACK_LINES = [10_000, 100_000, 1_000_000]
+# Rich blocks of the blocks benchmark: about 20 fit in the window.
+BLOCKS = [20, 200]
 LATENCY_COLORS = [(255, 128, 0), (0, 160, 255)]
 
 
@@ -89,6 +92,12 @@ def inner(ctl):
                 rows, cols = 5, 12
                 top, left = size.lines // 2 - 1, size.columns // 2 - 5
                 paint(LATENCY_COLORS[int(args[0])], rows, cols, top, left)
+            elif cmd == "blocks":
+                # Small Markdown blocks, two rows each, as raterm's OSC 7117.
+                for i in range(int(args[0])):
+                    md = f"**Block {i}**: some text with `code` and a [link](https://example.com)."
+                    write(f"\x1b]7117;md;{base64.b64encode(md.encode()).decode()}\x07")
+                (ctl / "blocks").write_text("done")
             elif cmd == "quit":
                 return
 
@@ -454,6 +463,27 @@ def bench_scrollback(term, record, out, extra):
             w.close()
 
 
+def bench_blocks(term, scratch, record):
+    """Memory with rich blocks in view (raterm only): a web view each."""
+    if term != "raterm":
+        return
+    for n in BLOCKS:
+        w = Window(term, scratch).ready()
+        try:
+            wait_pixel(*w.center, BLACK, 20)
+            time.sleep(0.5)
+            idle = pss_mib(w.procs())
+            w.send(f"blocks {n}")
+            while not (w.ctl / "blocks").exists():
+                time.sleep(0.05)
+            # The web views load their documents and measure them.
+            time.sleep(3)
+            procs = w.procs()
+            record(blocks=n, idle_pss_mib=idle, pss_mib=pss_mib(procs), rss_mib=rss_mib(procs), processes=len(procs))
+        finally:
+            w.close()
+
+
 def run(args):
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -483,6 +513,8 @@ def run(args):
                             bench_latency(term, scratch, record)
                         elif bench == "scrollback":
                             bench_scrollback(term, record, out, files["ascii"])
+                        elif bench == "blocks":
+                            bench_blocks(term, scratch, record)
                     except TimeoutError as e:
                         print(f"{bench} {term} run {n}: {e}", file=sys.stderr, flush=True)
     print(f"results in {results}")
@@ -574,6 +606,14 @@ def report(args):
         write_csv("scrollback", ["terminal", "lines", "latency_ms", "pss_mib"], csv)
         print("### Scrollback\n")
         table(["terminal", "lines", "filled in (s)", "PSS (MiB)", "latency (ms)", "4 MiB more (s)", "runs"], lines)
+
+    lines = []
+    for n in BLOCKS:
+        if rs := pick("blocks", blocks=n):
+            lines.append([f"{n}", f"{med(rs, 'idle_pss_mib'):.0f}", f"{med(rs, 'pss_mib'):.0f}", f"{med(rs, 'rss_mib'):.0f}", rs[0]["processes"], len(rs)])
+    if lines:
+        print("### Blocks\n")
+        table(["blocks", "PSS before (MiB)", "PSS with blocks (MiB)", "RSS (MiB)", "processes", "runs"], lines)
 
 
 def main():
