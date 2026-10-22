@@ -5,7 +5,7 @@ use alacritty_terminal::grid::{Dimensions, Row as GridRow};
 use alacritty_terminal::index::Line as GridLine;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 pub use alacritty_terminal::vte::ansi::CursorShape;
 use alacritty_terminal::vte::ansi::{Color, CursorStyle, NamedColor, Processor};
 use serde::Serialize;
@@ -301,18 +301,33 @@ impl Terminal {
             return;
         }
         self.stale = false;
+        // Only the lines alacritty saw change: rendering a whole screen of
+        // code took 0.4 ms, when typing changes a line or two.
+        let damaged: Option<Vec<usize>> = match self.term.damage() {
+            TermDamage::Full => None,
+            TermDamage::Partial(lines) => Some(lines.map(|d| d.line).collect()),
+        };
+        self.term.reset_damage();
+        let mut screen = std::mem::take(&mut self.screen);
         let grid = self.term.grid();
         let cursor = self
             .term
             .mode()
             .contains(TermMode::SHOW_CURSOR)
             .then_some(grid.cursor.point);
-        self.screen = (0..grid.screen_lines())
-            .map(|y| {
-                let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
-                self.render(&grid[GridLine(y as i32)], x)
-            })
-            .collect();
+        let render = |y: usize| {
+            let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
+            self.render(&grid[GridLine(y as i32)], x)
+        };
+        match damaged {
+            Some(lines) if screen.len() == grid.screen_lines() => {
+                for y in lines {
+                    screen[y] = render(y);
+                }
+            }
+            _ => screen = (0..grid.screen_lines()).map(render).collect(),
+        }
+        self.screen = screen;
     }
 
     pub fn alt_screen(&self) -> bool {
@@ -703,6 +718,43 @@ mod tests {
         assert_eq!(term.screen()[1].text(), "two! ");
         term.refresh();
         assert_eq!(term.screen()[1].text(), "two!? ");
+    }
+
+    #[test]
+    fn refreshing_damaged_lines_renders_the_whole_screen() {
+        let mut term = Terminal::new(12, 4);
+        let steps: [&[u8]; 9] = [
+            b"one\r\ntwo\r\nthree",
+            b"\x1b[1;1H\x1b[31mX",
+            b"\x1b[?25l\x1b[3;5Hhidden",
+            b"\x1b[?25h\x1b[2;2H",
+            b"\x1b[2K",
+            b"\r\n\r\n\r\nscrolled\r\nmore",
+            b"\x1b[?1049hALT\x1b[2;3Hb",
+            b"\x1b[?1049l\x1b[4;1H\x1b[4h\x1b[1;1Hins",
+            b"\x1b[4l\x1b]8;;https://a.b\x1b\\link\x1b]8;;\x1b\\ https://c.d",
+        ];
+        for step in steps {
+            term.advance(step);
+            term.refresh();
+            let partial: Vec<String> = term
+                .screen()
+                .iter()
+                .map(serde_json::to_string)
+                .map(Result::unwrap)
+                .collect();
+            // Without a previous screen, refresh renders every line.
+            term.screen.clear();
+            term.stale = true;
+            term.refresh();
+            let full: Vec<String> = term
+                .screen()
+                .iter()
+                .map(serde_json::to_string)
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(partial, full, "after {:?}", String::from_utf8_lossy(step));
+        }
     }
 
     #[test]
