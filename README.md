@@ -148,20 +148,17 @@ Shortcut actions are `copy`, `paste`, `paste_selection`, `search`, `zoom_in`,
 `zoom_out`, `zoom_reset`, `scroll_page_up`, `scroll_page_down`, `new_window`
 (a new window in the shell's current directory) and `none`.
 
-Colors, and any other style, go in `user.css` next to `config.toml`, loaded
-after raterm's own stylesheet:
+Colors go in `[colors]`, in alacritty's format, each key optional:
 
-```css
-:root {
-  --fg: #eaeaea;
-  --bg: #000000;
-  --cursor: #eaeaea;
-  --selection: var(--fg);       /* selected text is inverted by default */
-  --selection-text: var(--bg);
-  --c0: #000000;                /* the 16 ANSI colors, --c0 to --c15 */
-  --c1: #cd0000;
-  /* ... */
-}
+```toml
+[colors]
+foreground = "#eaeaea"
+background = "#151618"
+cursor = "#eaeaea"
+selection = "#eaeaea"        # background of selected text; inverted by default
+selection_text = "#151618"
+normal = ["#000000", "#cd0000", "#00cd00", "#cdcd00", "#7aa6da", "#cd00cd", "#3465a4", "#e5e5e5"]
+bright = ["#666666", "#ff0000", "#00ff00", "#ffff00", "#5c5cff", "#ff00ff", "#00ffff", "#ffffff"]
 ```
 
 ## Emitting rich blocks
