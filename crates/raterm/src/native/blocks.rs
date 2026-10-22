@@ -295,9 +295,19 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
                 view.evaluate_javascript(
                     // The body: the document is never smaller than the view.
                     // Again when it changes, as a video once it knows its size.
+                    // Then the natural width of the widest table, whatever
+                    // the width of the view (see View::block_place).
                     "(() => {
+                       const natural = t => {
+                         const width = t.style.width;
+                         t.style.width = 'max-content';
+                         const w = t.getBoundingClientRect().width;
+                         t.style.width = width;
+                         return Math.ceil(w);
+                       };
                        const fit = () => document.title =
-                         'h:' + Math.ceil(document.body.getBoundingClientRect().height);
+                         'h:' + Math.ceil(document.body.getBoundingClientRect().height) + ':' +
+                         Math.max(0, ...Array.from(document.querySelectorAll('body > table'), natural));
                        new ResizeObserver(fit).observe(document.body);
                        fit();
                      })()",
@@ -310,13 +320,17 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
         });
         let redraw = self.redraw.clone();
         let heights = Rc::downgrade(&self.heights);
+        let widths = Rc::downgrade(&self.table_widths);
         let me = self.me.clone();
         view.connect_title_notify(move |view| {
             let Some(title) = view.title() else { return };
-            if let Some(h) = title.strip_prefix("h:").and_then(|h| h.parse::<f64>().ok())
-                && let Some(heights) = heights.upgrade()
+            if let Some(size) = title.strip_prefix("h:")
+                && let Some((h, w)) = size.split_once(':')
+                && let (Ok(h), Ok(w)) = (h.parse::<f64>(), w.parse::<f64>())
+                && let (Some(heights), Some(widths)) = (heights.upgrade(), widths.upgrade())
             {
                 heights.borrow_mut().insert(entry, h);
+                widths.borrow_mut().insert(entry, w);
                 redraw.request();
             }
             if let Some(top) = title

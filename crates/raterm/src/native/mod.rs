@@ -20,7 +20,7 @@ use gtk::{cairo, gdk, gdk_pixbuf, glib, pango};
 use raterm::config::{Binding, Config};
 use raterm::history::Entry;
 use raterm::pty::Error;
-use raterm::rich::Rendered;
+use raterm::rich::{Kind, Rendered};
 use raterm::session::Session;
 use raterm::term::{Line, Modes, Terminal};
 use tao::event::{Event, WindowEvent};
@@ -82,6 +82,9 @@ struct View {
     /// Heights of the blocks measured so far, in pixels; filled by the web
     /// views once loaded, kept when they leave the view.
     heights: Rc<RefCell<HashMap<u64, f64>>>,
+    /// The natural width of the widest table of each block measured, for
+    /// `[blocks] padding`.
+    table_widths: Rc<RefCell<HashMap<u64, f64>>>,
     /// Never shown: the web views of blocks are related to it, so that they
     /// share its web process instead of starting one each.
     root: Option<WebView>,
@@ -207,6 +210,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         seen_next: 0,
         blocks: HashMap::new(),
         heights: Rc::default(),
+        table_widths: Rc::default(),
         root: None,
         redraw: redraw.clone(),
         me: Weak::new(),
@@ -514,6 +518,7 @@ impl View {
         }
         self.blocks.clear();
         self.heights.borrow_mut().clear();
+        self.table_widths.borrow_mut().clear();
         self.resized(&self.area.allocation());
         self.layout();
     }
@@ -889,17 +894,17 @@ impl View {
                 y += self.cell.1;
             }
         });
-        let width = (self.size.0 as f64 * self.cell.0) as i32;
         for (entry, block, y, rows) in &shown {
+            let (x, width) = self.block_place(*entry, block);
             if !self.blocks.contains_key(entry) {
                 let view = self.block_view(*entry, block);
-                self.fixed.put(&view, PAD_X as i32, *y as i32);
+                self.fixed.put(&view, x, *y as i32);
                 view.show();
                 self.blocks.insert(*entry, view);
             }
             let view = &self.blocks[entry];
             view.set_size_request(width, (*rows as f64 * self.cell.1) as i32);
-            self.fixed.move_(view, PAD_X as i32, *y as i32);
+            self.fixed.move_(view, x, *y as i32);
         }
         // Blocks out of view go; they are made again when they come back.
         let visible: Vec<u64> = shown.iter().map(|(e, ..)| *e).collect();
@@ -915,6 +920,24 @@ impl View {
             self.show_indicator();
         }
         self.invalidate();
+    }
+
+    /// Where a block goes across the view, and how wide: the whole width,
+    /// or with `[blocks] padding` a Markdown block as wide as its column of
+    /// text or its widest table, plus the padding, centered.
+    fn block_place(&self, entry: u64, block: &Rendered) -> (i32, i32) {
+        let cw = self.cell.0;
+        let full = self.size.0 as f64 * cw;
+        let columns = self.config.markdown.max_width as f64;
+        let width = match self.config.blocks.padding {
+            Some(padding) if block.kind == Kind::Md && columns > 0.0 => {
+                let table = self.table_widths.borrow().get(&entry).copied();
+                let content = (columns * cw).max(table.unwrap_or(0.0));
+                (content + 2.0 * padding as f64 * cw).min(full)
+            }
+            _ => full,
+        };
+        ((PAD_X + (full - width) / 2.0) as i32, width as i32)
     }
 
     /// Asks GTK to draw the rows that changed again, with the margins of

@@ -170,6 +170,9 @@ pub struct Blocks {
     pub font_size: f32,
     /// The terminal's background when unset.
     pub background: Option<Rgb>,
+    /// Columns on each side of the text of Markdown blocks, which are then
+    /// only as wide as it; the whole width when unset.
+    pub padding: Option<u16>,
 }
 
 impl Default for Blocks {
@@ -178,6 +181,7 @@ impl Default for Blocks {
             font_family: "sans-serif".into(),
             font_size: 12.0,
             background: None,
+            padding: None,
         }
     }
 }
@@ -313,6 +317,8 @@ mod tests {
     fn blocks_background_defaults_to_the_terminal() {
         let blocks = |text| Config::parse(text).unwrap().blocks;
         assert_eq!(blocks("").background, None);
+        assert_eq!(blocks("").padding, None);
+        assert_eq!(blocks("[blocks]\npadding = 2").padding, Some(2));
         let set = blocks("[blocks]\nbackground = \"#2a2d33\"");
         assert_eq!(set.background, Some(Rgb(0x2a2d33)));
         assert!(Config::parse("[blocks]\nbackground = \"red\"").is_err());
