@@ -4,8 +4,8 @@
 
 # raterm
 
-A terminal emulator for Linux, written in Rust, whose screen is a web view.
-Regular output (text, ANSI colors, cursor, full-screen programs like vim or
+A terminal emulator for Linux, written in Rust, that draws its text with GTK
+and shows rich blocks with WebKit. Regular output (text, ANSI colors, cursor, full-screen programs like vim or
 htop) works as in any terminal, but programs can also insert rich blocks at the
 cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 
@@ -202,13 +202,13 @@ md() {
 
 Programs writing to the terminal never run code in raterm:
 
-- HTML and Markdown blocks are rendered in sandboxed iframes, without
-  `allow-scripts`. SVG is shown as an image, which runs no script either.
-- The page's content security policy forbids any network access, apart from
-  raterm's own local media server: blocks can only show their own content and
-  inline data.
-- Links open in the desktop's handler (`xdg-open`), never in the terminal, and
-  only `http`, `https` and `mailto` links.
+- Each block is a web view of its own whose scripts never run. SVG is shown
+  as an image, which runs no script either.
+- The content security policy of blocks forbids any network access, apart
+  from raterm's own local media server: blocks can only show their own
+  content and inline data.
+- Links open on a click only, in the desktop's handler (`xdg-open`), never in
+  the terminal, and only `http`, `https` and `mailto` links.
 - Local videos and audio are streamed by a small HTTP server on `127.0.0.1`,
   which only serves the files announced by a block, under a random 128-bit
   token.
@@ -221,7 +221,8 @@ cargo clippy -- -D warnings
 ```
 
 The core (`pty`, `term`, `rich`, `media`) is a library tested without a
-window; `view` is the only module that knows about wry. Snapshot tests replay
+window; `native`, the view, is the only module that knows about GTK and
+WebKit. Snapshot tests replay
 recorded sessions from `crates/raterm/tests/data` (recorded with `record.sh`
 there); `RATERM_UPDATE_SNAPSHOTS=1 cargo test` rewrites them. The
 [specification](https://git.tforgione.fr/tforgione/raterm/wiki/Spec), in the

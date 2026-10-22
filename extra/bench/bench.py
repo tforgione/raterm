@@ -61,7 +61,7 @@ def write(data):
 
 def inner(ctl):
     ctl = Path(ctl)
-    # raterm starts the pty at 80x24 and resizes it once the page has measured
+    # raterm starts the pty at 80x24 and resizes it once the view has measured
     # its cells: repaint the background at each resize.
     background = MARK if (ctl / "startup").exists() else BLACK
     signal.signal(signal.SIGWINCH, lambda *_: paint(background))
