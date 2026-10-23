@@ -31,11 +31,15 @@
       "title": "ms"
     },
     "color": {
-      "field": "who",
+      "field": "terminal",
       "type": "nominal",
       "sort": [
         "raterm",
-        "others"
+        "gnome-terminal",
+        "terminator",
+        "alacritty",
+        "kitty",
+        "foot"
       ],
       "title": null,
       "legend": null
@@ -43,8 +47,8 @@
   },
   "transform": [
     {
-      "calculate": "indexof(datum.setup, 'raterm') == 0 ? 'raterm' : 'others'",
-      "as": "who"
+      "calculate": "split(datum.setup, ' @')[0]",
+      "as": "terminal"
     }
   ]
 }

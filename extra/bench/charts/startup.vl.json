@@ -41,20 +41,18 @@
       }
     },
     "color": {
-      "field": "who",
+      "field": "terminal",
       "type": "nominal",
       "sort": [
         "raterm",
-        "others"
+        "gnome-terminal",
+        "terminator",
+        "alacritty",
+        "kitty",
+        "foot"
       ],
       "title": null,
       "legend": null
     }
-  },
-  "transform": [
-    {
-      "calculate": "indexof(datum.terminal, 'raterm') == 0 ? 'raterm' : 'others'",
-      "as": "who"
-    }
-  ]
+  }
 }

@@ -13,14 +13,14 @@
       }
     }
   },
-  "transform": [
-    {
-      "calculate": "indexof(datum.terminal, 'raterm') == 0 ? 'raterm' : 'others'",
-      "as": "who"
-    }
-  ],
-  "facet": {
-    "row": {
+  "width": 520,
+  "mark": {
+    "type": "point",
+    "filled": true,
+    "size": 90
+  },
+  "encoding": {
+    "y": {
       "field": "workload",
       "type": "nominal",
       "sort": [
@@ -31,55 +31,39 @@
         "unicode",
         "cursor motion"
       ],
-      "title": null,
-      "header": {
-        "labelAngle": 0,
-        "labelAlign": "left"
-      }
-    }
-  },
-  "spacing": 6,
-  "spec": {
-    "width": 520,
-    "mark": {
-      "type": "point",
-      "filled": true,
-      "size": 90
+      "title": null
     },
-    "encoding": {
-      "y": {
-        "field": "terminal",
-        "type": "nominal",
-        "sort": [
-          "raterm",
-          "gnome-terminal",
-          "terminator",
-          "alacritty",
-          "kitty",
-          "foot"
-        ],
-        "title": null,
-        "axis": {
-          "labels": true
-        }
+    "yOffset": {
+      "field": "terminal",
+      "sort": [
+        "raterm",
+        "gnome-terminal",
+        "terminator",
+        "alacritty",
+        "kitty",
+        "foot"
+      ]
+    },
+    "x": {
+      "field": "displayed_mib_per_s",
+      "type": "quantitative",
+      "scale": {
+        "type": "log"
       },
-      "x": {
-        "field": "displayed_mib_per_s",
-        "type": "quantitative",
-        "scale": {
-          "type": "log"
-        },
-        "title": "MiB/s"
-      },
-      "color": {
-        "field": "who",
-        "type": "nominal",
-        "sort": [
-          "raterm",
-          "others"
-        ],
-        "title": null
-      }
+      "title": "MiB/s"
+    },
+    "color": {
+      "field": "terminal",
+      "type": "nominal",
+      "sort": [
+        "raterm",
+        "gnome-terminal",
+        "terminator",
+        "alacritty",
+        "kitty",
+        "foot"
+      ],
+      "title": null
     }
   }
 }
