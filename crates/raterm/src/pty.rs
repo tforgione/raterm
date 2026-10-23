@@ -25,6 +25,8 @@ impl Pty {
         let mut cmd = CommandBuilder::from_argv(command.iter().map(Into::into).collect());
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "raterm");
+        // Without it, tmux turns 24-bit colors into 256 ones.
+        cmd.env("COLORTERM", "truecolor");
         cmd.env("RATERM", "1");
         let child = pair.slave.spawn_command(cmd)?;
         // Dropping the slave lets reads on the master fail once the child exits.
