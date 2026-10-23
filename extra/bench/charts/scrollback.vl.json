@@ -2,7 +2,7 @@
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
   "title": {
     "text": "Cost of a full scrollback",
-    "subtitle": "median output latency (ms) and memory (PSS, MiB) with a full scrollback; lines on a log scale, each terminal on its own scale"
+    "subtitle": "median output latency (ms) and memory (PSS, MiB, log scale) with a full scrollback; lines on a log scale"
   },
   "data": {
     "url": "scrollback.csv",
@@ -15,16 +15,40 @@
       }
     }
   },
-  "transform": [
+  "hconcat": [
     {
-      "calculate": "indexof(datum.terminal, 'raterm') == 0 ? 'raterm' : 'others'",
-      "as": "who"
-    }
-  ],
-  "vconcat": [
-    {
-      "facet": {
-        "column": {
+      "width": 300,
+      "height": 220,
+      "mark": {
+        "type": "line",
+        "point": true
+      },
+      "encoding": {
+        "x": {
+          "field": "lines",
+          "type": "quantitative",
+          "scale": {
+            "type": "log"
+          },
+          "title": "lines of scrollback",
+          "axis": {
+            "values": [
+              10000,
+              100000,
+              1000000
+            ],
+            "format": "~s"
+          }
+        },
+        "y": {
+          "field": "latency_ms",
+          "type": "quantitative",
+          "title": "latency (ms)",
+          "scale": {
+            "zero": true
+          }
+        },
+        "color": {
           "field": "terminal",
           "type": "nominal",
           "sort": [
@@ -36,62 +60,42 @@
             "foot"
           ],
           "title": null
-        }
-      },
-      "spacing": 8,
-      "spec": {
-        "width": 120,
-        "height": 120,
-        "mark": {
-          "type": "line",
-          "point": true
-        },
-        "encoding": {
-          "x": {
-            "field": "lines",
-            "type": "quantitative",
-            "scale": {
-              "type": "log"
-            },
-            "title": "lines",
-            "axis": {
-              "values": [
-                10000,
-                100000,
-                1000000
-              ],
-              "format": "~s"
-            }
-          },
-          "y": {
-            "field": "latency_ms",
-            "type": "quantitative",
-            "title": "latency (ms)",
-            "scale": {
-              "zero": true
-            }
-          },
-          "color": {
-            "field": "who",
-            "type": "nominal",
-            "sort": [
-              "raterm",
-              "others"
-            ],
-            "title": null,
-            "legend": null
-          }
-        }
-      },
-      "resolve": {
-        "scale": {
-          "y": "independent"
         }
       }
     },
     {
-      "facet": {
-        "column": {
+      "width": 300,
+      "height": 220,
+      "mark": {
+        "type": "line",
+        "point": true
+      },
+      "encoding": {
+        "x": {
+          "field": "lines",
+          "type": "quantitative",
+          "scale": {
+            "type": "log"
+          },
+          "title": "lines of scrollback",
+          "axis": {
+            "values": [
+              10000,
+              100000,
+              1000000
+            ],
+            "format": "~s"
+          }
+        },
+        "y": {
+          "field": "pss_mib",
+          "type": "quantitative",
+          "title": "PSS (MiB)",
+          "scale": {
+            "type": "log"
+          }
+        },
+        "color": {
           "field": "terminal",
           "type": "nominal",
           "sort": [
@@ -103,56 +107,6 @@
             "foot"
           ],
           "title": null
-        }
-      },
-      "spacing": 8,
-      "spec": {
-        "width": 120,
-        "height": 120,
-        "mark": {
-          "type": "line",
-          "point": true
-        },
-        "encoding": {
-          "x": {
-            "field": "lines",
-            "type": "quantitative",
-            "scale": {
-              "type": "log"
-            },
-            "title": "lines",
-            "axis": {
-              "values": [
-                10000,
-                100000,
-                1000000
-              ],
-              "format": "~s"
-            }
-          },
-          "y": {
-            "field": "pss_mib",
-            "type": "quantitative",
-            "title": "PSS (MiB)",
-            "scale": {
-              "zero": true
-            }
-          },
-          "color": {
-            "field": "who",
-            "type": "nominal",
-            "sort": [
-              "raterm",
-              "others"
-            ],
-            "title": null,
-            "legend": null
-          }
-        }
-      },
-      "resolve": {
-        "scale": {
-          "y": "independent"
         }
       }
     }
