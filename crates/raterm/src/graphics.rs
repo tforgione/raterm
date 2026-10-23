@@ -1,6 +1,7 @@
 //! Images of the graphics protocols, shown through the cells they cover (see
 //! `Spec-Graphics`): each cell is marked with its slice of an image.
 
+mod diacritics;
 pub mod kitty;
 pub mod sixel;
 
@@ -112,6 +113,9 @@ pub struct Images {
     stored: HashMap<u32, Arc<Data>>,
     /// kitty's image numbers (`I`), to the ids raterm picked for them.
     numbers: HashMap<u32, u32>,
+    /// kitty's virtual placements, by image and placement id, which unicode
+    /// placeholders show.
+    virtuals: HashMap<(u32, u32), u32>,
     /// Oldest first.
     order: VecDeque<Key>,
     bytes: usize,
@@ -130,6 +134,29 @@ impl Images {
         self.placed.insert(id, (Arc::new(image), bytes));
         self.order.push_back(Key::Placed(id));
         id
+    }
+
+    /// Keeps a virtual placement of kitty's image `id`, replacing the one
+    /// with the same `placement` id; its number.
+    pub fn place_virtual(&mut self, image: Image, id: u32, placement: u32) -> u32 {
+        if let Some(old) = self.virtuals.get(&(id, placement)).copied() {
+            self.retain(|n, _| n != old);
+        }
+        let n = self.place(image, 0);
+        self.virtuals.insert((id, placement), n);
+        n
+    }
+
+    /// The virtual placement placeholders of image `id` show: placement
+    /// `placement`, or with 0 any of them (the first one).
+    pub fn virtual_of(&self, id: u32, placement: u32) -> Option<u32> {
+        match placement {
+            0 => (self.virtuals.iter())
+                .filter(|((i, _), _)| *i == id)
+                .min_by_key(|((_, p), _)| *p)
+                .map(|(_, &n)| n),
+            p => self.virtuals.get(&(id, p)).copied(),
+        }
     }
 
     pub fn get(&self, id: u32) -> Option<&Arc<Image>> {
@@ -201,6 +228,7 @@ impl Images {
                 if let Some((_, bytes)) = self.placed.remove(&id) {
                     self.bytes -= bytes;
                     self.removed += 1;
+                    self.virtuals.retain(|_, &mut n| n != id);
                 }
             }
             Key::Stored(id) => {

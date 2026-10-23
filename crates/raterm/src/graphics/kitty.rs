@@ -6,7 +6,16 @@ use base64::Engine;
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig};
 use base64::engine::{DecodePaddingMode, general_purpose};
 
+use super::diacritics::DIACRITICS;
 use super::{Data, MAX_IMAGE, Pixels};
+
+/// The char of unicode placeholders, in a private use plane.
+pub const PLACEHOLDER: char = '\u{10eeee}';
+
+/// The number a diacritic of unicode placeholders stands for.
+pub fn diacritic(c: char) -> Option<u32> {
+    DIACRITICS.binary_search(&c).ok().map(|n| n as u32)
+}
 
 /// Chunks are padded or not, as programs send them.
 const BASE64: GeneralPurpose = GeneralPurpose::new(
@@ -261,6 +270,14 @@ fn png_size(bytes: &[u8]) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn diacritics_stand_for_their_rank() {
+        assert_eq!(diacritic('\u{305}'), Some(0));
+        assert_eq!(diacritic('\u{30d}'), Some(1));
+        assert_eq!(diacritic('\u{1d244}'), Some(296));
+        assert_eq!(diacritic('a'), None);
+    }
 
     #[test]
     fn parses_keys_with_defaults() {

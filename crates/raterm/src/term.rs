@@ -603,7 +603,7 @@ impl Terminal {
     /// column after it. False when nothing changed.
     fn put(&mut self, cmd: &Command, data: Arc<Data>) -> bool {
         let (cw, ch) = self.cell;
-        if cw < 1.0 || ch < 1.0 || cmd.placeholders {
+        if cw < 1.0 || ch < 1.0 {
             return false;
         }
         let (x, y) = (cmd.source.0.min(data.width), cmd.source.1.min(data.height));
@@ -614,6 +614,9 @@ impl Terminal {
         );
         if w == 0 || h == 0 {
             return false;
+        }
+        if cmd.placeholders {
+            return cmd.id != 0 && self.put_virtual(cmd, data, (x, y, w, h));
         }
         // Pixels of the terminal per pixel of the image: the cells asked
         // for, one of them keeping the aspect ratio.
@@ -655,6 +658,45 @@ impl Terminal {
         };
         self.parser.advance(&mut self.term, after.as_bytes());
         self.drain_history();
+        true
+    }
+
+    /// Keeps a virtual placement of kitty's image, which its unicode
+    /// placeholders show: the image fits the cells asked for, its aspect
+    /// ratio kept, centered, as kitty 0.49 draws it.
+    fn put_virtual(
+        &mut self,
+        cmd: &Command,
+        data: Arc<Data>,
+        source: (usize, usize, usize, usize),
+    ) -> bool {
+        let (cw, ch) = self.cell;
+        let (w, h) = (source.2 as f64, source.3 as f64);
+        let cols = if cmd.cols == 0 {
+            (w / cw).ceil() as usize
+        } else {
+            cmd.cols
+        };
+        let rows = if cmd.rows == 0 {
+            (h / ch).ceil() as usize
+        } else {
+            cmd.rows
+        };
+        let (bw, bh) = (cols as f64 * cw, rows as f64 * ch);
+        // Pixels of the terminal per pixel of the image.
+        let s = (bw / w).min(bh / h);
+        let image = Image {
+            data,
+            source,
+            cell: (cw / s, ch / s),
+            offset: ((bw - w * s) / 2.0 / s, (bh - h * s) / 2.0 / s),
+            under: cmd.z < 0,
+            alt: false,
+            kitty: Some((cmd.id, cmd.placement)),
+        };
+        self.images.place_virtual(image, cmd.id, cmd.placement);
+        // Placeholders already on screen now show it.
+        self.full = true;
         true
     }
 
@@ -791,6 +833,7 @@ impl Terminal {
         let mut last = None;
         let mut style = Style::default();
         let mut images: Vec<Shown> = Vec::new();
+        let mut left: Option<Placeholder> = None;
         for (x, cell) in cells[..end].iter().enumerate() {
             if cell
                 .flags
@@ -810,7 +853,21 @@ impl Terminal {
                 link.clone(),
                 url,
             ));
-            let slice = link.as_ref().and_then(Slice::of);
+            let mark = link.as_ref().and_then(Slice::of);
+            let placeholder = (cell.c == kitty::PLACEHOLDER).then(|| {
+                let here = Placeholder::of(cell, x, left.filter(|l| l.at + 1 == x));
+                left = Some(here);
+                here
+            });
+            let slice = mark.or_else(|| {
+                let p = placeholder?;
+                let image = self.images.virtual_of(p.id(), p.placement())?;
+                Some(Slice {
+                    image,
+                    row: p.row as u16,
+                    col: p.col as u16,
+                })
+            });
             if let Some(slice) = slice {
                 match images.last_mut() {
                     Some(last)
@@ -830,7 +887,7 @@ impl Terminal {
             if key != last {
                 style = self.style(cell, Some(x) == cursor);
                 style.link = link
-                    .filter(|_| slice.is_none())
+                    .filter(|_| mark.is_none())
                     .map(|h| h.uri().to_owned())
                     .or_else(|| url.map(|i| chars[urls[i].0..urls[i].1].iter().collect()));
                 last = key;
@@ -846,7 +903,7 @@ impl Terminal {
             if joined {
                 let run = runs.last_mut().unwrap();
                 run.cluster = run.cluster.saturating_add(width);
-            } else if cell.zerowidth().is_some_and(|z| !z.is_empty()) {
+            } else if placeholder.is_none() && cell.zerowidth().is_some_and(|z| !z.is_empty()) {
                 runs.push(Run {
                     text: String::new(),
                     style: style.clone(),
@@ -863,6 +920,11 @@ impl Terminal {
                 });
             }
             let text = &mut runs.last_mut().unwrap().text;
+            // Placeholders are blanks for copies and searches.
+            if placeholder.is_some() {
+                text.push(' ');
+                continue;
+            }
             text.push(cell.c);
             text.extend(cell.zerowidth().into_iter().flatten());
         }
@@ -911,6 +973,73 @@ impl Terminal {
             attrs,
             link: None,
         }
+    }
+}
+
+/// A cell of kitty's unicode placeholders: the image id in its foreground
+/// color, the placement in its underline color, and its row, column and the
+/// high byte of the id in its diacritics, the missing ones taken from the
+/// placeholder on its left, as kitty specifies.
+#[derive(Clone, Copy)]
+struct Placeholder {
+    at: usize,
+    fg: Color,
+    under: Option<Color>,
+    row: u32,
+    col: u32,
+    high: u32,
+}
+
+impl Placeholder {
+    fn of(cell: &Cell, at: usize, left: Option<Placeholder>) -> Placeholder {
+        let numbers: Vec<u32> = (cell.zerowidth().into_iter().flatten())
+            .filter_map(|&c| kitty::diacritic(c))
+            .collect();
+        let (fg, under) = (cell.fg, cell.underline_color());
+        let left = left.filter(|l| (l.fg, l.under) == (fg, under));
+        let at_left = |row: u32| left.filter(|l| l.row == row);
+        let (row, col, high) = match numbers[..] {
+            [] => match left {
+                Some(l) => (l.row, l.col + 1, l.high),
+                None => (0, 0, 0),
+            },
+            [row] => match at_left(row) {
+                Some(l) => (row, l.col + 1, l.high),
+                None => (row, 0, 0),
+            },
+            [row, col] => match at_left(row).filter(|l| l.col + 1 == col) {
+                Some(l) => (row, col, l.high),
+                None => (row, col, 0),
+            },
+            [row, col, high, ..] => (row, col, high),
+        };
+        Placeholder {
+            at,
+            fg,
+            under,
+            row,
+            col,
+            high,
+        }
+    }
+
+    fn id(&self) -> u32 {
+        color_id(self.fg) | self.high << 24
+    }
+
+    fn placement(&self) -> u32 {
+        self.under.map_or(0, color_id)
+    }
+}
+
+/// The number a color stands for in placeholders: 24 bits, or 8 in 256
+/// colors.
+fn color_id(color: Color) -> u32 {
+    match color {
+        Color::Spec(c) => (c.r as u32) << 16 | (c.g as u32) << 8 | c.b as u32,
+        Color::Indexed(i) => i as u32,
+        Color::Named(n) if (n as usize) < 16 => n as u32,
+        Color::Named(_) => 0,
     }
 }
 
@@ -1469,6 +1598,39 @@ mod tests {
             "\x1b_Gi=31;OK\x1b\\"
         );
         assert_eq!(run("\x1b_Ga=d,d=i,i=1\x1b_Ga=x,i=32\x1b\\".into()), "");
+    }
+
+    #[test]
+    fn placeholders_show_virtual_placements() {
+        let mut term = sixel_term(30, 6);
+        // A 2 × 2 image in 8 × 2 cells of 2 × 4 pixels: centered, a pixel of
+        // the image (4 of the terminal) on each side.
+        term.advance(b"\x1b_Ga=T,f=24,s=2,v=2,c=8,r=2,U=1,i=42,q=2;/wAA/wAA/wAA/wAA\x1b\\");
+        let placed = term.images.virtual_of(42, 0).unwrap();
+        let image = term.images.get(placed).unwrap();
+        assert_eq!((image.cell, image.offset), ((0.5, 1.0), (1.0, 0.0)));
+        // Rows named on the first cell only, then all diacritics and the
+        // id in 24 bits, with its high byte (0) in a third diacritic.
+        let (ph, d0, d1, d2) = ("\u{10eeee}", "\u{305}", "\u{30d}", "\u{30e}");
+        let row0 = format!("\x1b[38;5;42m{ph}{d0}{ph}{ph}\x1b[39m|\r\n");
+        let row1 = format!("\x1b[38;2;0;0;42mx{ph}{d1}{d2}{d0}{ph}\x1b[39m\r\n");
+        term.advance(format!("{row0}{row1}").as_bytes());
+        term.refresh();
+        let slice = |row, col| Slice {
+            image: placed,
+            row,
+            col,
+        };
+        assert_eq!(slices(&term.screen()[0]), [(0, slice(0, 0))]);
+        assert_eq!(term.screen()[0].images[0].len, 3);
+        assert_eq!(slices(&term.screen()[1]), [(1, slice(1, 2))]);
+        assert_eq!(term.screen()[1].images[0].len, 2);
+        // Blanks for copies and searches.
+        assert_eq!(term.screen()[0].text(), "   |");
+        // Another id shows nothing.
+        term.advance(format!("\x1b[38;5;41m{ph}{d0}{d0}\x1b[39m").as_bytes());
+        term.refresh();
+        assert_eq!(slices(&term.screen()[2]), []);
     }
 
     #[test]
