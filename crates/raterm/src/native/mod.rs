@@ -151,9 +151,6 @@ impl Redraw {
 pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
     // First: everything that draws reads it.
     draw::init_theme(&config.colors);
-    let (session, reader) = Session::spawn(&config, command, 80, 24)?;
-    // Local videos and audio are streamed to the web views of blocks.
-    let media = raterm::media::serve(session.media())?;
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
@@ -194,6 +191,11 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     });
     let modes = Arc::new(Mutex::new(Modes::default()));
     let cell = measure(&area, &font);
+    // The program starts with the cell's size in pixels, which it may ask
+    // for (`CSI 16 t`) before the window is first allocated.
+    let (session, reader) = Session::spawn(&config, command, 80, 24, cell)?;
+    // Local videos and audio are streamed to the web views of blocks.
+    let media = raterm::media::serve(session.media())?;
     let baseline = draw::baseline(&area, &font);
     let view = Rc::new(RefCell::new(View {
         session: session.clone(),
@@ -520,6 +522,8 @@ impl View {
         self.blocks.clear();
         self.heights.borrow_mut().clear();
         self.table_widths.borrow_mut().clear();
+        // The pty gets the new sizes in pixels even if the cells fit the same.
+        self.size = (0, 0);
         self.resized(&self.area.allocation());
         self.layout();
     }
@@ -533,7 +537,8 @@ impl View {
         if (cols, rows) != self.size {
             self.size = (cols, rows);
             let redraw = self.redraw.clone();
-            self.session.resize(cols, rows, |_| redraw.request());
+            self.session
+                .resize(cols, rows, self.cell, |_| redraw.request());
         }
     }
 

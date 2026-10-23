@@ -22,7 +22,7 @@ fn main() {
     };
     for file in &args {
         let command = ["cat".to_owned(), file.clone()];
-        let (session, reader) = Session::spawn(&config, &command, cols, rows).unwrap();
+        let (session, reader) = Session::spawn(&config, &command, cols, rows, (0.0, 0.0)).unwrap();
         let mut batches = 0;
         let start = Instant::now();
         session.pump(reader, |_| batches += 1);

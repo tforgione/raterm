@@ -11,14 +11,17 @@ pub struct Pty {
 }
 
 impl Pty {
-    /// Spawns `command` (program and arguments) in a new pty and returns it
-    /// with a reader on its output.
+    /// Spawns `command` (program and arguments) in a new pty of `cols × rows`
+    /// cells, `width × height` pixels, and returns it with a reader on its
+    /// output.
     pub fn spawn(
         command: &[String],
         cols: u16,
         rows: u16,
+        width: u16,
+        height: u16,
     ) -> Result<(Pty, Box<dyn Read + Send>), Error> {
-        let pair = native_pty_system().openpty(size(cols, rows))?;
+        let pair = native_pty_system().openpty(size(cols, rows, width, height))?;
         let mut cmd = CommandBuilder::from_argv(command.iter().map(Into::into).collect());
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "raterm");
@@ -49,17 +52,18 @@ impl Pty {
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<(), Error> {
-        Ok(self.master.resize(size(cols, rows))?)
+    /// Resizes to `cols × rows` cells, `width × height` pixels in all.
+    pub fn resize(&self, cols: u16, rows: u16, width: u16, height: u16) -> Result<(), Error> {
+        Ok(self.master.resize(size(cols, rows, width, height))?)
     }
 }
 
-fn size(cols: u16, rows: u16) -> PtySize {
+fn size(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> PtySize {
     PtySize {
         rows,
         cols,
-        pixel_width: 0,
-        pixel_height: 0,
+        pixel_width,
+        pixel_height,
     }
 }
 
@@ -75,7 +79,7 @@ mod tests {
 
     #[test]
     fn shell_echoes_through_pty() {
-        let (mut pty, mut reader) = Pty::spawn(&["/bin/sh".into()], 80, 24).unwrap();
+        let (mut pty, mut reader) = Pty::spawn(&["/bin/sh".into()], 80, 24, 0, 0).unwrap();
         pty.write(b"echo rt-$((40+2))\nexit\n").unwrap();
         let mut out = Vec::new();
         // The read ends with EIO on Linux once the child is gone.

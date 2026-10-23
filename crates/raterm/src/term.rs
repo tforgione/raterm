@@ -198,6 +198,11 @@ pub struct Terminal {
     term: Term<Listener>,
     parser: Processor,
     term_events: Receiver<TermEvent>,
+    /// Replies of the core's own, sent along with `alacritty_terminal`'s to
+    /// keep their order: programs read up to the last answer they expect.
+    replies: Sender<TermEvent>,
+    /// The size of a cell in pixels, as the view measured it.
+    cell: (f64, f64),
     filter: Filter,
     /// Local files shown by video blocks.
     pub media: Media,
@@ -220,7 +225,7 @@ impl Terminal {
             ..Config::default()
         };
         let size = TermSize::new(cols as usize, rows as usize);
-        let term = Term::new(config, &size, Listener(tx));
+        let term = Term::new(config, &size, Listener(tx.clone()));
         Terminal {
             bold_is_bright: false,
             // The view starts from the same modes.
@@ -228,6 +233,8 @@ impl Terminal {
             term,
             parser: Processor::new(),
             term_events: rx,
+            replies: tx,
+            cell: (0.0, 0.0),
             filter: Filter::default(),
             media: Media::default(),
             history: History::default(),
@@ -268,15 +275,29 @@ impl Terminal {
                     changed = true;
                 }
                 Piece::Block(block) => changed |= self.insert(block),
+                Piece::CellSize => {
+                    let (w, h) = (self.cell.0.round(), self.cell.1.round());
+                    let reply = format!("\x1b[6;{h};{w}t");
+                    let _ = self.replies.send(TermEvent::PtyWrite(reply));
+                }
             }
         }
         self.update(changed)
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Update {
+    /// Resizes to `cols × rows` cells of `cell` pixels.
+    pub fn resize(&mut self, cols: u16, rows: u16, cell: (f64, f64)) -> Update {
+        self.cell = cell;
         self.term
             .resize(TermSize::new(cols.max(1) as usize, rows.max(1) as usize));
         self.update(true)
+    }
+
+    /// The width and height of the text area in pixels.
+    pub fn text_area(&self) -> (u16, u16) {
+        let width = self.term.columns() as f64 * self.cell.0;
+        let height = self.term.screen_lines() as f64 * self.cell.1;
+        (width.round() as u16, height.round() as u16)
     }
 
     /// Encodes pasted text, honoring bracketed paste mode.
@@ -462,6 +483,12 @@ impl Terminal {
         for event in self.term_events.try_iter() {
             match event {
                 TermEvent::PtyWrite(text) => update.reply.push_str(&text),
+                // Its callback multiplies a whole cell width, which would drift
+                // from the text area over the columns.
+                TermEvent::TextAreaSizeRequest(_) => {
+                    let (w, h) = self.text_area();
+                    update.reply.push_str(&format!("\x1b[4;{h};{w}t"));
+                }
                 TermEvent::Title(title) => update.title = Some(title),
                 TermEvent::ResetTitle => update.title = Some(String::new()),
                 _ => {}
@@ -839,6 +866,18 @@ mod tests {
     fn device_status_report_is_answered() {
         let mut term = Terminal::new(10, 2);
         assert_eq!(term.advance(b"ab\x1b[6n").reply, "\x1b[1;3R");
+    }
+
+    #[test]
+    fn sizes_in_pixels_are_answered_in_order() {
+        let mut term = Terminal::new(10, 2);
+        term.resize(80, 24, (9.6, 19.0));
+        assert_eq!(term.text_area(), (768, 456));
+        // As yazi probes: the answers before the DA1 it waits for.
+        assert_eq!(
+            term.advance(b"\x1b[16t\x1b[14t\x1b[c").reply,
+            "\x1b[6;19;10t\x1b[4;456;768t\x1b[?6c"
+        );
     }
 
     #[test]

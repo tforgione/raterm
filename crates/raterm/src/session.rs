@@ -17,15 +17,19 @@ pub struct Session {
 }
 
 impl Session {
-    /// Runs `command` (program and arguments) in a new terminal.
+    /// Runs `command` (program and arguments) in a new terminal of
+    /// `cols × rows` cells of `cell` pixels.
     pub fn spawn(
         config: &Config,
         command: &[String],
         cols: u16,
         rows: u16,
+        cell: (f64, f64),
     ) -> Result<(Arc<Session>, Box<dyn Read + Send>), Error> {
-        let (pty, reader) = Pty::spawn(command, cols, rows)?;
         let mut term = Terminal::new(cols, rows);
+        term.resize(cols, rows, cell);
+        let (width, height) = term.text_area();
+        let (pty, reader) = Pty::spawn(command, cols, rows, width, height)?;
         term.bold_is_bright = config.bold_is_bright;
         term.history.cap = config.scrollback;
         let shape = match config.cursor.style {
@@ -67,10 +71,12 @@ impl Session {
         f(&term)
     }
 
-    pub fn resize(&self, cols: u16, rows: u16, emit: impl FnOnce(Update)) {
+    /// Resizes to `cols × rows` cells of `cell` pixels.
+    pub fn resize(&self, cols: u16, rows: u16, cell: (f64, f64), emit: impl FnOnce(Update)) {
         let mut term = self.term.lock().unwrap();
-        let update = term.resize(cols, rows);
-        if let Err(e) = self.pty.lock().unwrap().resize(cols, rows) {
+        let update = term.resize(cols, rows, cell);
+        let (width, height) = term.text_area();
+        if let Err(e) = self.pty.lock().unwrap().resize(cols, rows, width, height) {
             eprintln!("raterm: pty resize failed: {e}");
         }
         self.dispatch(update, emit);

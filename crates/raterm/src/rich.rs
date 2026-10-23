@@ -12,6 +12,8 @@ use crate::media::Media;
 /// Maximum size of a sequence payload; larger blocks are dropped.
 pub const MAX_PAYLOAD: usize = 8 << 20;
 const PREFIX: &[u8] = b"\x1b]7117;";
+/// The size of a cell in pixels, which `alacritty_terminal` does not answer.
+const CELL_SIZE: &[u8] = b"\x1b[16t";
 const BEL: u8 = 0x07;
 const ESC: u8 = 0x1b;
 
@@ -20,6 +22,8 @@ pub enum Piece {
     /// Regular terminal output.
     Bytes(Vec<u8>),
     Block(Block),
+    /// `CSI 16 t`, answered by the core in order with the other replies.
+    CellSize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -67,7 +71,7 @@ pub struct Rendered {
 enum State {
     #[default]
     Ground,
-    /// `buf` holds a strict prefix of `PREFIX`.
+    /// `buf` holds a strict prefix of `PREFIX` or `CELL_SIZE`.
     Prefix,
     /// `buf` holds the payload read so far.
     Payload,
@@ -103,18 +107,24 @@ impl Filter {
                 self.buf.push(b);
             }
             State::Ground => text.push(b),
-            State::Prefix if b == PREFIX[self.buf.len()] => {
+            State::Prefix => {
                 self.buf.push(b);
-                if self.buf.len() == PREFIX.len() {
+                if self.buf == PREFIX {
                     self.buf.clear();
                     self.state = State::Payload;
+                } else if self.buf == CELL_SIZE {
+                    self.reset();
+                    if !text.is_empty() {
+                        out.push(Piece::Bytes(std::mem::take(text)));
+                    }
+                    out.push(Piece::CellSize);
+                } else if !PREFIX.starts_with(&self.buf) && !CELL_SIZE.starts_with(&self.buf) {
+                    // Not ours: give the bytes back and look at `b` again.
+                    self.buf.pop();
+                    text.append(&mut self.buf);
+                    self.state = State::Ground;
+                    self.step(b, text, out);
                 }
-            }
-            State::Prefix => {
-                // Not ours: give the bytes back and look at `b` again.
-                text.append(&mut self.buf);
-                self.state = State::Ground;
-                self.step(b, text, out);
             }
             State::Payload => match b {
                 BEL => self.finish(text, out),
@@ -328,7 +338,7 @@ mod tests {
                 .iter()
                 .flat_map(|p| match p {
                     Piece::Bytes(b) => b.clone(),
-                    Piece::Block(_) => Vec::new(),
+                    _ => Vec::new(),
                 })
                 .collect();
             assert_eq!(text, b"xy", "cut at {cut}");
@@ -347,8 +357,32 @@ mod tests {
     }
 
     #[test]
+    fn extracts_cell_size_query_across_splits() {
+        let input = b"a\x1b[16tb";
+        for cut in 0..input.len() {
+            let mut filter = Filter::default();
+            let mut pieces = filter.feed(&input[..cut]);
+            pieces.extend(filter.feed(&input[cut..]));
+            pieces.retain(|p| p != &Piece::Bytes(Vec::new()));
+            let at = pieces.iter().position(|p| p == &Piece::CellSize);
+            assert!(at.is_some(), "cut at {cut}");
+            let text = |ps: &[Piece]| -> Vec<u8> {
+                ps.iter()
+                    .flat_map(|p| match p {
+                        Piece::Bytes(b) => b.clone(),
+                        _ => Vec::new(),
+                    })
+                    .collect()
+            };
+            let (before, after) = pieces.split_at(at.unwrap());
+            assert_eq!(text(before), b"a", "cut at {cut}");
+            assert_eq!(text(after), b"b", "cut at {cut}");
+        }
+    }
+
+    #[test]
     fn other_sequences_pass_through() {
-        let input = b"\x1b]7;file:///tmp\x07\x1b]0;title\x07\x1b[31m";
+        let input = b"\x1b]7;file:///tmp\x07\x1b]0;title\x07\x1b[31m\x1b[14t\x1b[166t";
         assert_eq!(
             Filter::default().feed(input),
             [Piece::Bytes(input.to_vec())]
