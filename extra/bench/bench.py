@@ -198,10 +198,13 @@ def close(color, want):
     return all(abs(a - b) <= 8 for a, b in zip(color, want))
 
 
-def wait_pixel(x, y, want, timeout, interval=0):
-    """Polls until the pixel has the color `want`; returns when it was seen."""
+def wait_pixel(x, y, want, timeout, interval=0, window=None):
+    """Polls until the pixel has the color `want`; returns when it was seen.
+    Gives up at once if `window` closed."""
     end = time.time_ns() + int(timeout * 1e9)
     while time.time_ns() < end:
+        if window and not window.alive():
+            raise TimeoutError(f"{window.term} window closed (see {window.ctl}/stderr)")
         color = pixel(x, y)
         seen = time.time_ns()
         if close(color, want):
@@ -305,7 +308,8 @@ class Window:
         inner = f"{sys.executable} -I {Path(__file__).resolve()} inner {self.ctl}"
         self.term = term
         if term == "raterm":
-            cmd = f"env XDG_CONFIG_HOME={scratch}/config {RATERM} --title {self.title} -e {inner}"
+            # Its errors are kept, should it die during a run.
+            cmd = f"env XDG_CONFIG_HOME={scratch}/config {RATERM} --title {self.title} -e {inner} 2> {self.ctl}/stderr"
         elif term == "alacritty":
             cmd = f"alacritty --config-file {scratch}/config/alacritty.toml --title {self.title} -e {inner}"
         elif term == "kitty":
@@ -357,6 +361,13 @@ class Window:
         while not (self.ctl / "size").exists() or not (self.ctl / "size").read_text():
             time.sleep(0.01)
         return json.loads((self.ctl / "size").read_text())
+
+    def alive(self):
+        try:
+            os.kill(self.pid, 0)
+            return True
+        except ProcessLookupError:
+            return False
 
     def send(self, cmd):
         self.fifo.write(cmd + "\n")
@@ -446,7 +457,7 @@ def bench_throughput(term, scratch, record, files):
             procs, idle = w.procs(), pss_mib(w.procs())
             cpu0 = cpu_seconds(procs)
             w.send(f"cat {path}")
-            seen = wait_pixel(*w.center, MARK, 600, interval=0.02)
+            seen = wait_pixel(*w.center, MARK, 600, interval=0.02, window=w)
             cpu = cpu_seconds(procs) - cpu0
             t0, t1 = json.loads((w.ctl / "drained").read_text())
             time.sleep(1)
@@ -509,7 +520,7 @@ def bench_scrollback(term, record, out, extra):
             time.sleep(0.5)
             t0 = time.time_ns()
             w.send(f"cat {fill}")
-            fill_s = (wait_pixel(*w.center, MARK, 900, interval=0.05) - t0) / 1e9
+            fill_s = (wait_pixel(*w.center, MARK, 900, interval=0.05, window=w) - t0) / 1e9
             # Most of the garbage of the output is collected by then.
             time.sleep(15)
             pss = pss_mib(w.procs())
@@ -518,7 +529,7 @@ def bench_scrollback(term, record, out, extra):
             time.sleep(0.5)
             t0 = time.time_ns()
             w.send(f"cat {extra}")
-            extra_s = (wait_pixel(*w.center, MARK, 900, interval=0.05) - t0) / 1e9
+            extra_s = (wait_pixel(*w.center, MARK, 900, interval=0.05, window=w) - t0) / 1e9
             time.sleep(5)
             ls = latencies(w, 30)
             record(lines=lines, fill_s=fill_s, pss_mib=pss, extra_s=extra_s, latency_ms=statistics.median(ls))
@@ -548,7 +559,9 @@ def bench_blocks(term, scratch, record):
 
 
 def run(args):
-    out = Path(args.out)
+    # Absolute: the program in the windows does not start in this directory,
+    # and opens the workloads by their paths.
+    out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
     scratch = Path(tempfile.mkdtemp(prefix="raterm-bench-"))
     setup(scratch)
