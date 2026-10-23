@@ -40,7 +40,7 @@ WIDTH, HEIGHT, X, Y = 1200, 800, 60, 60
 WORKLOAD_MIB = int(os.environ.get("BENCH_MIB", 8))
 MARK, BLACK = (255, 0, 255), (0, 0, 0)
 # Scrollback sizes of the scrollback benchmark; alacritty stops at 100,000.
-TERMINALS = ["raterm", "gnome-terminal", "terminator", "alacritty"]
+TERMINALS = ["raterm", "gnome-terminal", "terminator", "alacritty", "kitty", "foot"]
 SCROLLBACK_LINES = [10_000, 100_000, 1_000_000]
 # Rich blocks of the blocks benchmark: about 20 fit in the window.
 BLOCKS = [20, 200]
@@ -308,6 +308,10 @@ class Window:
             cmd = f"env XDG_CONFIG_HOME={scratch}/config {RATERM} --title {self.title} -e {inner}"
         elif term == "alacritty":
             cmd = f"alacritty --config-file {scratch}/config/alacritty.toml --title {self.title} -e {inner}"
+        elif term == "kitty":
+            cmd = f"kitty --config {scratch}/config/kitty.conf --title {self.title} {inner}"
+        elif term == "foot":
+            cmd = f"foot --config {scratch}/config/foot.ini --title {self.title} {inner}"
         elif term == "terminator":
             # Without D-Bus, the window is a process of its own.
             cmd = f"terminator -u -g {scratch}/config/terminator.conf -T {self.title} -x {inner}"
@@ -377,7 +381,7 @@ class Window:
 
 
 def setup(scratch, history=10_000):
-    """Same font and scrollback for both terminals."""
+    """Same font, scrollback and colors for all terminals."""
     config = scratch / "config"
     (config / "raterm").mkdir(parents=True, exist_ok=True)
     (config / "raterm/config.toml").write_text(
@@ -386,6 +390,16 @@ def setup(scratch, history=10_000):
     (config / "alacritty.toml").write_text(
         f'[font]\nsize = {SIZE}\nnormal = {{ family = "{FONT}" }}\n'
         f"[colors.primary]\nbackground = '#000000'\n[scrolling]\nhistory = {history}\n"
+    )
+    (config / "kitty.conf").write_text(
+        f"font_family {FONT}\nfont_size {SIZE}\nscrollback_lines {history}\n"
+        "background #000000\nforeground #eaeaea\nconfirm_os_window_close 0\nupdate_check_interval 0\n"
+        # Otherwise kitty opens at the size it last had, after being mapped.
+        f"remember_window_size no\ninitial_window_width {WIDTH}\ninitial_window_height {HEIGHT}\n"
+    )
+    (config / "foot.ini").write_text(
+        f"[main]\nfont={FONT}:size={SIZE}\n[scrollback]\nlines={history}\n"
+        "[colors-dark]\nbackground=000000\nforeground=eaeaea\n"
     )
     (config / "terminator.conf").write_text(
         "[global_config]\n  dbus = False\n[profiles]\n  [[default]]\n"

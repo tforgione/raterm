@@ -26,7 +26,9 @@
         "raterm",
         "gnome-terminal",
         "terminator",
-        "alacritty"
+        "alacritty",
+        "kitty",
+        "foot"
       ],
       "title": null
     },
@@ -39,15 +41,20 @@
       }
     },
     "color": {
-      "field": "terminal",
+      "field": "who",
       "type": "nominal",
       "sort": [
         "raterm",
-        "gnome-terminal",
-        "terminator",
-        "alacritty"
+        "others"
       ],
+      "title": null,
       "legend": null
     }
-  }
+  },
+  "transform": [
+    {
+      "calculate": "indexof(datum.terminal, 'raterm') == 0 ? 'raterm' : 'others'",
+      "as": "who"
+    }
+  ]
 }

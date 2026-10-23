@@ -13,39 +13,64 @@
       }
     }
   },
-  "width": 520,
-  "mark": "bar",
-  "encoding": {
-    "y": {
+  "transform": [
+    {
+      "calculate": "indexof(datum.terminal, 'raterm') == 0 ? 'raterm' : 'others'",
+      "as": "who"
+    }
+  ],
+  "facet": {
+    "row": {
       "field": "state",
       "type": "nominal",
-      "sort": null,
-      "title": null
-    },
-    "yOffset": {
-      "field": "terminal",
       "sort": [
-        "raterm",
-        "gnome-terminal",
-        "terminator",
-        "alacritty"
-      ]
-    },
-    "x": {
-      "field": "pss_mib",
-      "type": "quantitative",
-      "title": "MiB"
-    },
-    "color": {
-      "field": "terminal",
-      "type": "nominal",
-      "sort": [
-        "raterm",
-        "gnome-terminal",
-        "terminator",
-        "alacritty"
+        "idle",
+        "after ascii",
+        "after short lines",
+        "after 256 colors",
+        "after truecolor",
+        "after unicode",
+        "after cursor motion"
       ],
-      "title": null
+      "title": null,
+      "header": {
+        "labelAngle": 0,
+        "labelAlign": "left"
+      }
+    }
+  },
+  "spacing": 6,
+  "spec": {
+    "width": 520,
+    "mark": "bar",
+    "encoding": {
+      "y": {
+        "field": "terminal",
+        "type": "nominal",
+        "sort": [
+          "raterm",
+          "gnome-terminal",
+          "terminator",
+          "alacritty",
+          "kitty",
+          "foot"
+        ],
+        "title": null
+      },
+      "x": {
+        "field": "pss_mib",
+        "type": "quantitative",
+        "title": "MiB"
+      },
+      "color": {
+        "field": "who",
+        "type": "nominal",
+        "sort": [
+          "raterm",
+          "others"
+        ],
+        "title": null
+      }
     }
   }
 }

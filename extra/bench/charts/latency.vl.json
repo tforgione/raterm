@@ -31,10 +31,20 @@
       "title": "ms"
     },
     "color": {
-      "field": "setup",
+      "field": "who",
       "type": "nominal",
-      "sort": null,
+      "sort": [
+        "raterm",
+        "others"
+      ],
+      "title": null,
       "legend": null
     }
-  }
+  },
+  "transform": [
+    {
+      "calculate": "indexof(datum.setup, 'raterm') == 0 ? 'raterm' : 'others'",
+      "as": "who"
+    }
+  ]
 }

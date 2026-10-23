@@ -13,37 +13,73 @@
       }
     }
   },
-  "width": 520,
-  "mark": {
-    "type": "point",
-    "filled": true,
-    "size": 120
-  },
-  "encoding": {
-    "y": {
+  "transform": [
+    {
+      "calculate": "indexof(datum.terminal, 'raterm') == 0 ? 'raterm' : 'others'",
+      "as": "who"
+    }
+  ],
+  "facet": {
+    "row": {
       "field": "workload",
       "type": "nominal",
-      "sort": null,
-      "title": null
-    },
-    "x": {
-      "field": "displayed_mib_per_s",
-      "type": "quantitative",
-      "scale": {
-        "type": "log"
-      },
-      "title": "MiB/s"
-    },
-    "color": {
-      "field": "terminal",
-      "type": "nominal",
       "sort": [
-        "raterm",
-        "gnome-terminal",
-        "terminator",
-        "alacritty"
+        "ascii",
+        "short lines",
+        "256 colors",
+        "truecolor",
+        "unicode",
+        "cursor motion"
       ],
-      "title": null
+      "title": null,
+      "header": {
+        "labelAngle": 0,
+        "labelAlign": "left"
+      }
+    }
+  },
+  "spacing": 6,
+  "spec": {
+    "width": 520,
+    "mark": {
+      "type": "point",
+      "filled": true,
+      "size": 90
+    },
+    "encoding": {
+      "y": {
+        "field": "terminal",
+        "type": "nominal",
+        "sort": [
+          "raterm",
+          "gnome-terminal",
+          "terminator",
+          "alacritty",
+          "kitty",
+          "foot"
+        ],
+        "title": null,
+        "axis": {
+          "labels": true
+        }
+      },
+      "x": {
+        "field": "displayed_mib_per_s",
+        "type": "quantitative",
+        "scale": {
+          "type": "log"
+        },
+        "title": "MiB/s"
+      },
+      "color": {
+        "field": "who",
+        "type": "nominal",
+        "sort": [
+          "raterm",
+          "others"
+        ],
+        "title": null
+      }
     }
   }
 }

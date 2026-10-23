@@ -60,7 +60,22 @@ mib = {wl: next(r["mib"] for r in rows if r.get("workload") == wl) for wl in wls
 display = lambda t, wl: m("throughput", "display_s", terminal=t, workload=wl)
 drain = lambda t, wl: m("throughput", "drain_s", terminal=t, workload=wl)
 speeds = lambda t: [mib[wl] / display(t, wl) for wl in wls]
-others = ["gnome-terminal", "terminator", "alacritty"]
+names = {
+    "raterm": "raterm",
+    "gnome-terminal": "GNOME Terminal",
+    "terminator": "Terminator",
+    "alacritty": "Alacritty",
+    "kitty": "kitty",
+    "foot": "foot",
+}
+others = [t for t in names if t != "raterm" and t in grids]
+
+
+def against(values, f="{:.0f}", unit=""):
+    """`values` of the other terminals, as "a for X, b for Y and c for Z"."""
+    parts = [f"{f.format(values[t])}{unit} for {names[t]}" for t in others]
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
 gt_ratio = [display("raterm", wl) / display("gnome-terminal", wl) for wl in wls]
 drains = [drain("raterm", wl) for wl in wls]
 drain_ratio = [drain("raterm", wl) / min(drain(t, wl) for t in others) for wl in wls]
@@ -73,7 +88,13 @@ first = {t: m("startup", "first_frame_ms", terminal=t) for t in grids}
 idle = {t: m("startup", "idle_pss_mib", terminal=t) for t in grids}
 sb = lambda t, n: m("scrollback", "pss_mib", terminal=t, lines=n)
 per_line = (sb("raterm", 1_000_000) - sb("raterm", 10_000)) * 2**20 / 990_000
-ala_line = (sb("alacritty", 100_000) - sb("alacritty", 10_000)) * 2**10 / 90_000
+# KiB per line of the terminals that keep their scrollback in memory, from
+# their largest measure (alacritty stops at 100,000).
+in_memory = {
+    t: (sb(t, n) - sb(t, 10_000)) * 2**10 / (n - 10_000)
+    for t, n in [("alacritty", 100_000), ("kitty", 1_000_000), ("foot", 1_000_000)]
+}
+others_display = [display(t, wl) for t in others for wl in wls]
 runs = max(r["run"] for r in rows if r["bench"] == "latency") + 1
 sb_runs = max(r["run"] for r in rows if r["bench"] == "scrollback") + 1
 blocks = {n: m("blocks", "pss_mib", terminal="raterm", blocks=n) for n in (20, 200)}
@@ -84,38 +105,38 @@ page = f"""# Performance
 raterm draws its grid with Pango on GTK, and its rich blocks in web views
 (see [Spec-View](Spec-View)): the specification accepts that it
 will never match a GPU terminal. This page measures by how much, against
-Alacritty, and against two terminals that are not GPU-accelerated, GNOME
-Terminal and Terminator (both on VTE, GNOME's terminal widget), with the
-script `extra/bench/bench.py`.
+two GPU-accelerated terminals, Alacritty and kitty, and three that are not,
+GNOME Terminal and Terminator (both on VTE, GNOME's terminal widget) and
+foot, with the script `extra/bench/bench.py`.
 
 ## In short
 
 - **Throughput**: raterm takes {span(gt_ratio, "{:.1f}")} times GNOME Terminal's time to
-  display a large output, at {span(speeds("raterm"))} MiB/s against {span(speeds("gnome-terminal"))} MiB/s. The three other
-  terminals are close to the precision of the measure (a few frames), so the
-  ratios are lower bounds. Since the first measures, the fixes of the page,
+  display a large output, at {span(speeds("raterm"))} MiB/s against {span(speeds("gnome-terminal"))} MiB/s. The others
+  display it in {span(others_display, "{:.2f}")} s; each time is precise to a frame (17 ms),
+  so the ratios of the shortest ones are rough. Since the first measures, the fixes of the page,
   M5, those of the core and the native grid (M6) made raterm {span(gains)} times faster (see
   [below](#since-the-first-measures)).
 - **Latency** from a program's output to the screen, at 60 Hz: {lmed["raterm"]:.0f} ms median
-  for raterm, {lmed["gnome-terminal"]:.0f} ms for GNOME Terminal, {lmed["terminator"]:.0f} ms for Terminator and {lmed["alacritty"]:.0f} ms for
-  Alacritty; at most {lat["raterm"][-1]:.0f} ms for raterm, {max(lat[t][-1] for t in others):.0f} ms for the others.
-- **Startup**: {first["raterm"]:.0f} ms to the first frame, against {first["gnome-terminal"]:.0f} ms for GNOME
-  Terminal, {first["terminator"]:.0f} ms for Terminator and {first["alacritty"]:.0f} ms for Alacritty.
+  for raterm, {against(lmed, unit=" ms")}; at most {lat["raterm"][-1]:.0f} ms for raterm,
+  {max(lat[t][-1] for t in others):.0f} ms for the others.
+- **Startup**: {first["raterm"]:.0f} ms to the first frame, against {against(first, unit=" ms")}.
 - **Memory**: {idle["raterm"]:.0f} MiB idle (PSS, in one process: WebKit only starts with
-  the first block), against {idle["gnome-terminal"]:.0f} MiB for GNOME Terminal, {idle["terminator"]:.0f} MiB for Terminator
-  and {idle["alacritty"]:.0f} MiB for Alacritty. With 20 small Markdown blocks in view,
+  the first block), against {against(idle, unit=" MiB")}. With 20 small Markdown blocks in view,
   {blocks[20]:.0f} MiB: their web views share one WebKit process.
 - **Scrollback**: since M5, a full scrollback no longer slows raterm down, up
   to 1,000,000 lines; it costs about {per_line:.0f} bytes per line of memory, where VTE
-  keeps its scrollback in files and stays flat.
+  keeps its scrollback in files and stays flat, and Alacritty, kitty and foot
+  take {span(in_memory.values(), "{:.1f}")} KiB per line.
 
 ## Setup
 
 - AMD Ryzen 9 5900X, 62 GiB of RAM, NVIDIA RTX 5060 Ti, Arch Linux, Hyprland
   0.56.2, one 2560x1440 screen at 60 Hz.
 - raterm at commit `{commit}` (release build, GTK 3 and Pango, WebKitGTK
-  2.54.1 for the blocks), GNOME Terminal 3.60.0 and Terminator 2.1.6 on VTE 0.84.1, Alacritty 0.17.0.
-- All four with the same font (UbuntuMono Nerd Font, 11 pt), a scrollback of
+  2.54.1 for the blocks), GNOME Terminal 3.60.0 and Terminator 2.1.6 on VTE
+  0.84.1, Alacritty 0.17.0, kitty 0.49.2, foot 1.28.0.
+- All six with the same font (UbuntuMono Nerd Font, 11 pt), a scrollback of
   10,000 lines (except for the scrollback measures), a black background and a
   1200x800 floating window, without menu bar (GNOME Terminal) or title bar
   (Terminator). The grids differ with each terminal's cells and margins:
@@ -166,7 +187,9 @@ frame, without the time grim takes to start.
 Each terminal runs isolated, without touching the user's own: GNOME Terminal
 on a server of its own (`--app-id`) whose settings live in a GSettings
 keyfile instead of dconf, Terminator without D-Bus (`-u`) on its own config
-file, raterm and Alacritty on their own config files.
+file, raterm, Alacritty, kitty and foot on their own config files (kitty
+with a fixed window size: otherwise it takes back the last size it had,
+after Hyprland placed it).
 
 ## Results
 
@@ -208,9 +231,10 @@ screen full of code (`extra/bench/trace.py`); the rest is the wait.
 raterm keeps its scrollback in memory in the core and only draws the rows on
 screen (see [Spec-Scrollback](Spec-Scrollback)): the latency and
 the output speed do not depend on its size, and a line costs about {per_line:.0f} bytes.
-Alacritty keeps its whole scrollback in memory too, at about {ala_line:.1f} KiB per line;
-VTE writes it to temporary files, so the memory of GNOME Terminal and
-Terminator does not grow.
+Alacritty, kitty and foot keep their whole scrollback in memory too, at about
+{in_memory["alacritty"]:.1f}, {in_memory["kitty"]:.1f} and {in_memory["foot"]:.1f} KiB per line: kitty takes
+{sb("kitty", 1_000_000) / 1024:.1f} GiB for 1,000,000 lines, foot {sb("foot", 1_000_000) / 1024:.1f} GiB. VTE writes it to
+temporary files, so the memory of GNOME Terminal and Terminator does not grow.
 
 {tables("scrollback")}
 
@@ -252,11 +276,11 @@ is skipped). The script needs `grim`, Hyprland and cargo (it builds
 cargo build --release
 BENCH_MIB=4 extra/bench/bench.py run --only startup,latency,throughput,blocks --runs 5 --out bench-results
 BENCH_MIB=4 extra/bench/bench.py run --only scrollback --runs 2 --out bench-results
-extra/bench/charts/build.sh bench-results ../raterm.wiki/bench   # tables and charts
-extra/bench/page.py bench-results ../raterm.wiki                 # these pages
+extra/bench/charts/build.sh bench-results .wiki/bench   # tables and charts
+extra/bench/page.py bench-results .wiki                 # these pages
 ```
 
-`--terminals raterm,gnome-terminal,terminator,alacritty` selects the
+`--terminals raterm,gnome-terminal,terminator,alacritty,kitty,foot` selects the
 terminals; results append to `bench-results/results.jsonl`, so a run on
 another screen (at 120 Hz for instance) adds to the same report.
 """
