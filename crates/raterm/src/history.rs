@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use serde::Serialize;
 
 use crate::rich::{Kind, Rendered};
-use crate::term::{Line, Run};
+use crate::term::{Line, Run, Shown};
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -42,6 +42,9 @@ impl History {
         if let Some(Entry::Line(last)) = self.entries.back_mut()
             && last.wrap
         {
+            let at = last.cells();
+            last.images
+                .extend(row.images.iter().map(|&s| Shown { at: s.at + at, ..s }));
             last.runs.extend(row.runs);
             last.runs = fitted(std::mem::take(&mut last.runs));
             last.wrap = row.wrap;
@@ -147,6 +150,7 @@ mod tests {
                 ..Default::default()
             }],
             wrap,
+            images: Vec::new(),
         }
     }
 

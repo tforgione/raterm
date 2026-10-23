@@ -1,10 +1,12 @@
 //! Drawing the grid with Pango, in the terminal's colors.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use gtk::{cairo, pango};
 use raterm::config;
+use raterm::graphics::{Image, Images};
 use raterm::term::{Attrs, CursorShape, Line, Run, Terminal, Tint};
 
 use super::{PAD_X, PAD_Y, View, Visual, boxes};
@@ -151,13 +153,14 @@ impl View {
         cr.set_operator(cairo::Operator::Over);
         let style = self.area.style_context();
         self.session.read(|term| {
+            (self.images.borrow_mut()).retain(|&id, _| term.images.get(id).is_some());
             let visuals = self.visuals(term);
             self.drawn.set(visuals.len());
             for (i, visual) in visuals.iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
                     let marks = self.marks(term, line, at);
-                    self.draw_line(cr, &style, i, line, start, y, &marks);
+                    self.draw_line(cr, &style, i, line, start, y, &marks, &term.images);
                 }
             }
             self.draw_indicator(cr, term);
@@ -354,6 +357,7 @@ impl View {
         start: usize,
         y: f64,
         marks: &Marks,
+        images: &Images,
     ) {
         let (cw, ch) = self.cell;
         let width = self.area.allocated_width();
@@ -382,6 +386,7 @@ impl View {
                 return;
             };
             self.render_line(&rc, style, line, start, margin, marks);
+            self.render_slices(&rc, line, start, margin, images);
             raterm::trace!("rendered {row}");
             rows[row] = Some(Row {
                 line: line.clone(),
@@ -540,6 +545,68 @@ impl View {
         }
     }
 }
+
+impl View {
+    /// Draws the slices of images cells of a line show, over their text, at
+    /// height `y` of `cr`: an image keeps its size in cells, whatever the
+    /// zoom.
+    fn render_slices(
+        &self,
+        cr: &cairo::Context,
+        line: &Line,
+        start: usize,
+        y: f64,
+        images: &Images,
+    ) {
+        let (cw, ch) = self.cell;
+        let end = start + self.size.0 as usize;
+        for shown in &line.images {
+            let slice = shown.slice;
+            let (from, to) = (shown.at.max(start), (shown.at + shown.len).min(end));
+            if from < to
+                && let Some(image) = images.get(slice.image)
+                && let Some(surface) = self.surface(slice.image, image)
+            {
+                let (iw, ih) = image.cell;
+                let x = PAD_X + (from - start) as f64 * cw;
+                cr.save().ok();
+                cr.rectangle(x, y, (to - from) as f64 * cw, ch);
+                cr.clip();
+                cr.translate(x, y);
+                cr.scale(cw / iw, ch / ih);
+                let sx = (slice.col as usize + from - shown.at) as f64 * iw;
+                let _ = cr.set_source_surface(&surface, -sx, -(slice.row as f64) * ih);
+                let _ = cr.paint();
+                cr.restore().ok();
+            }
+        }
+    }
+
+    /// The surface of an image, made when it first shows.
+    fn surface(&self, id: u32, image: &Image) -> Option<cairo::ImageSurface> {
+        let mut images = self.images.borrow_mut();
+        if let Some(surface) = images.get(&id) {
+            return Some(surface.clone());
+        }
+        let (w, h) = (image.width as i32, image.height as i32);
+        let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
+        let stride = surface.stride() as usize;
+        {
+            let mut data = surface.data().ok()?;
+            for (row, pixels) in image.pixels.chunks(image.width).enumerate() {
+                let bytes = pixels.iter().flat_map(|p| p.to_ne_bytes());
+                for (dst, b) in data[row * stride..].iter_mut().zip(bytes) {
+                    *dst = b;
+                }
+            }
+        }
+        images.insert(id, surface.clone());
+        Some(surface)
+    }
+}
+
+/// Surfaces of the images in view, by number.
+pub(super) type Surfaces = HashMap<u32, cairo::ImageSurface>;
 
 /// The image of a row of the view, and what it was drawn from.
 pub(super) struct Row {

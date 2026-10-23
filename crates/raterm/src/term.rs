@@ -1,8 +1,9 @@
+use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::{Dimensions, Row as GridRow};
-use alacritty_terminal::index::Line as GridLine;
+use alacritty_terminal::index::{Column, Line as GridLine};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
@@ -10,6 +11,7 @@ pub use alacritty_terminal::vte::ansi::CursorShape;
 use alacritty_terminal::vte::ansi::{Color, CursorStyle, NamedColor, Processor};
 use serde::Serialize;
 
+use crate::graphics::{Image, Images, Slice, sixel};
 use crate::history::{self, Entry, History};
 use crate::media::Media;
 use crate::rich::{Block, Filter, Piece};
@@ -60,6 +62,19 @@ pub struct Line {
     /// The line continues on the next one (soft wrap).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub wrap: bool,
+    /// The cells that show images. Kept apart from the runs, which would
+    /// all be larger for them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Shown>,
+}
+
+/// Cells of a line that show an image: `len` cells from cell `at`, the first
+/// one showing `slice`, the next ones the next columns of its row.
+#[derive(Serialize, Debug, Clone, Copy, PartialEq)]
+pub struct Shown {
+    pub at: usize,
+    pub len: usize,
+    pub slice: Slice,
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq, Default)]
@@ -206,6 +221,11 @@ pub struct Terminal {
     filter: Filter,
     /// Local files shown by video blocks.
     pub media: Media,
+    /// The images cells show.
+    pub images: Images,
+    /// Cells changed out of `alacritty_terminal`'s sight, which tracks the
+    /// lines it changes: the whole screen is rendered again.
+    full: bool,
     pub history: History,
     /// The screen as last rendered, and whether output came since: it is
     /// rendered when the view reads it, once per frame at most, rather than
@@ -237,6 +257,8 @@ impl Terminal {
             cell: (0.0, 0.0),
             filter: Filter::default(),
             media: Media::default(),
+            images: Images::default(),
+            full: false,
             history: History::default(),
             screen: Vec::new(),
             stale: true,
@@ -280,6 +302,11 @@ impl Terminal {
                     let reply = format!("\x1b[6;{h};{w}t");
                     let _ = self.replies.send(TermEvent::PtyWrite(reply));
                 }
+                Piece::Graphics(params) => {
+                    let reply = self.graphics_attributes(&params);
+                    let _ = self.replies.send(TermEvent::PtyWrite(reply));
+                }
+                Piece::Sixel(data) => changed |= self.place_sixel(&data),
             }
         }
         self.update(changed)
@@ -341,7 +368,7 @@ impl Terminal {
             self.render(&grid[GridLine(y as i32)], x)
         };
         match damaged {
-            Some(lines) if screen.len() == grid.screen_lines() => {
+            Some(lines) if !self.full && screen.len() == grid.screen_lines() => {
                 for y in lines {
                     screen[y] = render(y);
                 }
@@ -349,6 +376,7 @@ impl Terminal {
             _ => screen = (0..grid.screen_lines()).map(render).collect(),
         }
         self.screen = screen;
+        self.full = false;
     }
 
     pub fn alt_screen(&self) -> bool {
@@ -458,6 +486,77 @@ impl Terminal {
         true
     }
 
+    /// The answer to XTSMGRAPHICS: the registers of Sixel images, and their
+    /// largest size, the text area's; setting them keeps them as they are.
+    fn graphics_attributes(&self, params: &[usize]) -> String {
+        let (item, action) = (params[0], params.get(1).copied().unwrap_or(0));
+        let (w, h) = self.text_area();
+        match (item, action) {
+            (1, 1..=4) => format!("\x1b[?1;0;{}S", sixel::REGISTERS),
+            (2, 1..=4) => format!("\x1b[?2;0;{w};{h}S"),
+            (1 | 2, _) => format!("\x1b[?{item};2;0S"),
+            _ => format!("\x1b[?{item};1;0S"),
+        }
+    }
+
+    /// Places a Sixel image at the cursor, which ends on the row below it,
+    /// in the same column. False when nothing changed.
+    fn place_sixel(&mut self, data: &[u8]) -> bool {
+        let (cw, ch) = self.cell;
+        let (w, h) = self.text_area();
+        if cw < 1.0 || ch < 1.0 {
+            return false;
+        }
+        let Some((width, height, pixels)) = sixel::decode(data, (w as usize, h as usize)) else {
+            return false;
+        };
+        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
+        if alt {
+            self.drop_unseen_alt_images();
+        }
+        let image = self.images.add(Image {
+            width,
+            height,
+            pixels,
+            cell: self.cell,
+            alt,
+        });
+        let start = self.term.grid().cursor.point.column.0;
+        let cols = ((width as f64 / cw).ceil() as usize).min(self.term.columns() - start);
+        let rows = (height as f64 / ch).ceil() as usize;
+        for row in 0..rows {
+            if row > 0 {
+                self.parser.advance(&mut self.term, b"\n");
+            }
+            let line = self.term.grid().cursor.point.line;
+            for col in 0..cols {
+                let slice = Slice {
+                    image,
+                    row: row as u16,
+                    col: col as u16,
+                };
+                self.term.grid_mut()[line][Column(start + col)].set_hyperlink(Some(slice.mark()));
+            }
+        }
+        let below = format!("\n\x1b[{}G", start + 1);
+        self.parser.advance(&mut self.term, below.as_bytes());
+        self.drain_history();
+        self.full = true;
+        true
+    }
+
+    /// Drops the images of the alternate screen that it no longer shows.
+    fn drop_unseen_alt_images(&mut self) {
+        let grid = self.term.grid();
+        let seen: HashSet<u32> = (0..grid.screen_lines())
+            .flat_map(|y| grid[GridLine(y as i32)][..].iter())
+            .filter_map(|cell| Slice::of(&cell.hyperlink()?))
+            .map(|slice| slice.image)
+            .collect();
+        self.images
+            .retain(|id, image| !image.alt || seen.contains(&id));
+    }
+
     /// Moves the rows that scrolled out of the main screen to the scrollback.
     ///
     /// The alternate grid has no history, so this only ever drains the main
@@ -482,6 +581,10 @@ impl Terminal {
         };
         for event in self.term_events.try_iter() {
             match event {
+                // Sixel, on top of what `alacritty_terminal` announces (VT102).
+                TermEvent::PtyWrite(text) if text == "\x1b[?6c" => {
+                    update.reply.push_str("\x1b[?62;4;22c")
+                }
                 TermEvent::PtyWrite(text) => update.reply.push_str(&text),
                 // Its callback multiplies a whole cell width, which would drift
                 // from the text area over the columns.
@@ -498,6 +601,9 @@ impl Terminal {
         let mode = *self.term.mode();
         let alt = mode.contains(TermMode::ALT_SCREEN);
         if alt != self.alt {
+            if !alt {
+                self.images.retain(|_, image| !image.alt);
+            }
             self.alt = alt;
             update.changed = true;
         }
@@ -525,6 +631,7 @@ impl Terminal {
         // Building a style allocates: only do it when the attributes change.
         let mut last = None;
         let mut style = Style::default();
+        let mut images: Vec<Shown> = Vec::new();
         for (x, cell) in cells[..end].iter().enumerate() {
             if cell
                 .flags
@@ -535,18 +642,36 @@ impl Terminal {
             let url = urls
                 .iter()
                 .position(|&(start, stop)| (start..stop).contains(&x));
+            let link = cell.hyperlink();
             let key = Some((
                 cell.fg,
                 cell.bg,
                 cell.flags,
                 Some(x) == cursor,
-                cell.hyperlink(),
+                link.clone(),
                 url,
             ));
+            let slice = link.as_ref().and_then(Slice::of);
+            if let Some(slice) = slice {
+                match images.last_mut() {
+                    Some(last)
+                        if last.at + last.len == x
+                            && (last.slice.image, last.slice.row) == (slice.image, slice.row)
+                            && last.slice.col as usize + last.len == slice.col as usize =>
+                    {
+                        last.len += 1
+                    }
+                    _ => images.push(Shown {
+                        at: x,
+                        len: 1,
+                        slice,
+                    }),
+                }
+            }
             if key != last {
                 style = self.style(cell, Some(x) == cursor);
-                style.link = cell
-                    .hyperlink()
+                style.link = link
+                    .filter(|_| slice.is_none())
                     .map(|h| h.uri().to_owned())
                     .or_else(|| url.map(|i| chars[urls[i].0..urls[i].1].iter().collect()));
                 last = key;
@@ -587,6 +712,7 @@ impl Terminal {
             wrap: cells
                 .last()
                 .is_some_and(|cell| cell.flags.contains(Flags::WRAPLINE)),
+            images,
         }
     }
 
@@ -668,6 +794,16 @@ impl Line {
     fn text(&self) -> String {
         self.runs.iter().map(|r| r.text.as_str()).collect()
     }
+
+    /// The cells the runs take.
+    pub fn cells(&self) -> usize {
+        let cells = |run: &Run| match run.cluster {
+            0 if run.style.attrs.has(Attrs::WIDE) => 2 * run.text.chars().count(),
+            0 => run.text.chars().count(),
+            n => n as usize,
+        };
+        self.runs.iter().map(cells).sum()
+    }
 }
 
 fn is_zero(n: &u8) -> bool {
@@ -678,6 +814,7 @@ fn is_blank(cell: &Cell) -> bool {
     // Most cells have the default background: skip `color` for them.
     cell.c == ' '
         && !cell.flags.contains(Flags::INVERSE)
+        && cell.hyperlink().is_none()
         && (cell.bg == Color::Named(NamedColor::Background) || color(cell.bg).is_none())
 }
 
@@ -876,7 +1013,7 @@ mod tests {
         // As yazi probes: the answers before the DA1 it waits for.
         assert_eq!(
             term.advance(b"\x1b[16t\x1b[14t\x1b[c").reply,
-            "\x1b[6;19;10t\x1b[4;456;768t\x1b[?6c"
+            "\x1b[6;19;10t\x1b[4;456;768t\x1b[?62;4;22c"
         );
     }
 
@@ -1019,6 +1156,109 @@ mod tests {
         assert_eq!(term.cursor(), (CursorShape::Beam, false));
         term.advance(b"\x1b[0 q");
         assert_eq!(term.cursor(), (CursorShape::Underline, true));
+    }
+
+    /// A red Sixel image of 4 × 12 pixels: 2 × 3 cells of 2 × 4 pixels.
+    const SIXEL: &[u8] = b"\x1bPq#1;2;100;0;0#1!4~-!4~\x1b\\";
+
+    fn sixel_term(cols: u16, rows: u16) -> Terminal {
+        let mut term = Terminal::new(cols, rows);
+        term.resize(cols, rows, (2.0, 4.0));
+        term
+    }
+
+    /// The slices of a line, with the cell they start at.
+    fn slices(line: &Line) -> Vec<(usize, Slice)> {
+        line.images.iter().map(|s| (s.at, s.slice)).collect()
+    }
+
+    fn slice(row: u16, col: u16) -> Slice {
+        Slice { image: 0, row, col }
+    }
+
+    #[test]
+    fn sixel_marks_its_cells_and_leaves_the_cursor_below() {
+        let mut term = sixel_term(10, 5);
+        term.advance(b" ");
+        term.advance(SIXEL);
+        term.advance(b"x");
+        term.refresh();
+        for y in 0..3 {
+            assert_eq!(
+                slices(&term.screen()[y]),
+                [(1, slice(y as u16, 0))],
+                "row {y}"
+            );
+            assert_eq!(term.screen()[y].text(), "   ");
+        }
+        // The cursor's cell is in the text.
+        assert_eq!(term.screen()[3].text(), " x ");
+        assert_eq!(
+            term.images.get(0).map(|i| (i.width, i.height)),
+            Some((4, 12))
+        );
+    }
+
+    #[test]
+    fn sixel_scrolls_into_the_history_with_its_cells() {
+        // As tall as the screen: the cursor below it scrolls one row out.
+        let mut term = sixel_term(10, 3);
+        term.advance(SIXEL);
+        term.advance(b"x\r\n");
+        term.refresh();
+        let rows: Vec<_> = (term.history.first()..term.history.next())
+            .map(|n| match term.history.get(n) {
+                Some(Entry::Line(line)) => slices(line),
+                _ => Vec::new(),
+            })
+            .collect();
+        assert_eq!(rows, [vec![(0, slice(0, 0))], vec![(0, slice(1, 0))]]);
+        assert_eq!(slices(&term.screen()[0]), [(0, slice(2, 0))]);
+        assert_eq!(term.screen()[1].text(), "x");
+    }
+
+    #[test]
+    fn sixel_is_clipped_to_the_text_area() {
+        let mut term = sixel_term(1, 2);
+        term.advance(SIXEL);
+        let image = term.images.get(0).unwrap();
+        assert_eq!((image.width, image.height), (2, 8));
+    }
+
+    #[test]
+    fn writing_over_a_sixel_cell_cuts_only_that_cell() {
+        let mut term = sixel_term(10, 4);
+        term.advance(SIXEL);
+        term.advance(b"\x1b[1;1Hy");
+        term.refresh();
+        assert_eq!(slices(&term.screen()[0]), [(1, slice(0, 1))]);
+        assert_eq!(slices(&term.screen()[1]), [(0, slice(1, 0))]);
+    }
+
+    #[test]
+    fn alternate_screen_drops_its_images_on_exit() {
+        let mut term = sixel_term(10, 4);
+        term.advance(SIXEL);
+        term.advance(b"\x1b[?1049h");
+        term.advance(SIXEL);
+        term.advance(b"\x1b[2J\x1b[H");
+        term.advance(SIXEL);
+        // The second image was cleared before the third came.
+        assert!(term.images.get(1).is_none());
+        assert!(term.images.get(2).is_some());
+        term.advance(b"\x1b[?1049l");
+        assert!(term.images.get(0).is_some());
+        assert!(term.images.get(2).is_none());
+    }
+
+    #[test]
+    fn sixel_is_announced() {
+        let mut term = sixel_term(80, 24);
+        assert_eq!(
+            term.advance(b"\x1b[?1;1;0S\x1b[?2;1;0S\x1b[?3;1;0S\x1b[c")
+                .reply,
+            "\x1b[?1;0;1024S\x1b[?2;0;160;96S\x1b[?3;1;0S\x1b[?62;4;22c"
+        );
     }
 
     #[test]

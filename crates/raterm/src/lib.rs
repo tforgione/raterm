@@ -1,4 +1,5 @@
 pub mod config;
+pub mod graphics;
 pub mod history;
 pub mod media;
 pub mod pty;
