@@ -14,8 +14,8 @@ use crate::media::Media;
 
 /// Maximum size of a sequence payload; larger blocks are dropped.
 pub const MAX_PAYLOAD: usize = 8 << 20;
-/// Maximum size of the data of a Sixel image.
-pub const MAX_SIXEL: usize = crate::graphics::MAX_IMAGE;
+/// Maximum size of a sequence of the graphics protocols.
+const MAX_GRAPHICS: usize = crate::graphics::MAX_IMAGE;
 const PREFIX: &[u8] = b"\x1b]7117;";
 const BEL: u8 = 0x07;
 const ESC: u8 = 0x1b;
@@ -35,16 +35,26 @@ pub enum Piece {
     Graphics(Vec<usize>),
     /// `DCS P1 ; P2 ; P3 q … ST`: a Sixel image, its data after `q`.
     Sixel(Vec<u8>),
+    /// `APC G … ST`: a command of kitty's graphics protocol, after `G`.
+    Kitty(Vec<u8>),
 }
 
 /// What the bytes held by the filter start.
 enum Prefix {
     Partial,
     Other,
-    Block,
+    /// A sequence with a payload, up to ST.
+    Payload(Payload),
     CellSize,
     Graphics(Vec<usize>),
+}
+
+#[derive(Default, Clone, Copy, PartialEq)]
+enum Payload {
+    #[default]
+    Block,
     Sixel,
+    Kitty,
 }
 
 impl Prefix {
@@ -53,8 +63,13 @@ impl Prefix {
         match buf.get(1) {
             None => Prefix::Partial,
             Some(b']') if !PREFIX.starts_with(buf) => Prefix::Other,
-            Some(b']') if buf.len() == PREFIX.len() => Prefix::Block,
+            Some(b']') if buf.len() == PREFIX.len() => Prefix::Payload(Payload::Block),
             Some(b']') => Prefix::Partial,
+            Some(b'_') => match buf.get(2) {
+                None => Prefix::Partial,
+                Some(b'G') => Prefix::Payload(Payload::Kitty),
+                Some(_) => Prefix::Other,
+            },
             Some(&kind @ (b'[' | b'P')) => {
                 let rest = &buf[2..];
                 // `?` opens the parameters of XTSMGRAPHICS.
@@ -79,7 +94,7 @@ impl Prefix {
                 match (kind, private, last) {
                     (b'[', false, b't') if body == b"16" => Prefix::CellSize,
                     (b'[', true, b'S') => Prefix::Graphics(numbers(body)),
-                    (b'P', false, b'q') => Prefix::Sixel,
+                    (b'P', false, b'q') => Prefix::Payload(Payload::Sixel),
                     _ => Prefix::Other,
                 }
             }
@@ -153,14 +168,13 @@ enum State {
     PayloadEsc,
 }
 
-/// Extracts rich blocks, Sixel images and queries from a pty byte stream,
-/// across read boundaries.
+/// Extracts rich blocks, images and queries from a pty byte stream, across
+/// read boundaries.
 #[derive(Default)]
 pub struct Filter {
     state: State,
     buf: Vec<u8>,
-    /// The payload is a Sixel image's, rather than a block's.
-    sixel: bool,
+    payload: Payload,
     overflow: bool,
 }
 
@@ -207,8 +221,8 @@ impl Filter {
                         self.state = State::Ground;
                         return self.step(b, text, out);
                     }
-                    Prefix::Block | Prefix::Sixel => {
-                        self.sixel = self.buf[1] == b'P';
+                    Prefix::Payload(payload) => {
+                        self.payload = payload;
                         self.buf.clear();
                         self.state = State::Payload;
                         return;
@@ -220,12 +234,15 @@ impl Filter {
                 push(text, out, piece);
             }
             State::Payload => match b {
-                BEL if !self.sixel => self.finish(text, out),
+                BEL if self.payload == Payload::Block => self.finish(text, out),
                 ESC => self.state = State::PayloadEsc,
                 _ if self.overflow => {}
                 _ => {
                     self.buf.push(b);
-                    let max = if self.sixel { MAX_SIXEL } else { MAX_PAYLOAD };
+                    let max = match self.payload {
+                        Payload::Block => MAX_PAYLOAD,
+                        _ => MAX_GRAPHICS,
+                    };
                     if self.buf.len() > max {
                         eprintln!("raterm: sequence over {max} bytes, ignored");
                         self.overflow = true;
@@ -246,14 +263,15 @@ impl Filter {
     }
 
     fn finish(&mut self, text: &mut Vec<u8>, out: &mut Vec<Piece>) {
-        if self.overflow {
-        } else if self.sixel {
-            push(text, out, Piece::Sixel(std::mem::take(&mut self.buf)));
-        } else {
-            match parse(&self.buf) {
+        let data = std::mem::take(&mut self.buf);
+        match self.payload {
+            _ if self.overflow => {}
+            Payload::Sixel => push(text, out, Piece::Sixel(data)),
+            Payload::Kitty => push(text, out, Piece::Kitty(data)),
+            Payload::Block => match parse(&data) {
                 Ok(block) => push(text, out, Piece::Block(block)),
                 Err(e) => eprintln!("raterm: invalid rich block: {e}"),
-            }
+            },
         }
         self.reset();
     }
@@ -261,7 +279,7 @@ impl Filter {
     fn reset(&mut self) {
         self.state = State::Ground;
         self.buf.clear();
-        self.sixel = false;
+        self.payload = Payload::Block;
         self.overflow = false;
     }
 }
@@ -482,8 +500,8 @@ mod tests {
     }
 
     #[test]
-    fn extracts_sixel_and_graphics_queries() {
-        let input = b"a\x1bP0;1;0q#0~\x1b\\b\x1b[?2;1;0Sc";
+    fn extracts_images_and_graphics_queries() {
+        let input = b"a\x1bP0;1;0q#0~\x1b\\b\x1b[?2;1;0Sc\x1b_Ga=q;AAAA\x1b\\d";
         for cut in 0..input.len() {
             let mut filter = Filter::default();
             let mut pieces = filter.feed(&input[..cut]);
@@ -496,12 +514,13 @@ mod tests {
                     other => taken.push(other),
                 }
             }
-            assert_eq!(text, b"abc", "cut at {cut}");
+            assert_eq!(text, b"abcd", "cut at {cut}");
             assert_eq!(
                 taken,
                 [
                     Piece::Sixel(b"#0~".to_vec()),
-                    Piece::Graphics(vec![2, 1, 0])
+                    Piece::Graphics(vec![2, 1, 0]),
+                    Piece::Kitty(b"a=q;AAAA".to_vec())
                 ],
                 "cut at {cut}"
             );

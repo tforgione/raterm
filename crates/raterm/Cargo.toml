@@ -9,6 +9,8 @@ alacritty_terminal = "0.26"
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 comrak = { version = "0.56", default-features = false, features = ["syntect-fancy"] }
+# kitty's images sent through zlib; already built in by syntect.
+flate2 = "1"
 gtk = "0.18"
 portable-pty = "0.9"
 serde = { version = "1", features = ["derive"] }

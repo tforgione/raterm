@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use gtk::prelude::*;
 use gtk::{cairo, pango};
 use raterm::config;
-use raterm::graphics::{Image, Images};
+use raterm::graphics::{Image, Images, Pixels};
 use raterm::term::{Attrs, CursorShape, Line, Run, Terminal, Tint};
 
 use super::{PAD_X, PAD_Y, View, Visual, boxes};
@@ -154,6 +154,11 @@ impl View {
         let style = self.area.style_context();
         self.session.read(|term| {
             (self.images.borrow_mut()).retain(|&id, _| term.images.get(id).is_some());
+            // Rows kept may show images since removed, which their cells
+            // still mark.
+            if self.removed.replace(term.images.removed) != term.images.removed {
+                self.rows.borrow_mut().clear();
+            }
             let visuals = self.visuals(term);
             self.drawn.set(visuals.len());
             for (i, visual) in visuals.iter().enumerate() {
@@ -250,7 +255,10 @@ impl View {
     /// number of rows).
     pub(super) fn changed_rows(&self, term: &Terminal) -> Option<Vec<usize>> {
         let visuals = self.visuals(term);
-        if visuals.len() != self.drawn.get() || self.scrolled_at.get().is_some() {
+        if visuals.len() != self.drawn.get()
+            || self.scrolled_at.get().is_some()
+            || self.removed.get() != term.images.removed
+        {
             return None;
         }
         let rows = self.rows.borrow();
@@ -385,8 +393,9 @@ impl View {
             let Ok(rc) = cairo::Context::new(&image) else {
                 return;
             };
+            self.render_slices(&rc, line, start, margin, images, true);
             self.render_line(&rc, style, line, start, margin, marks);
-            self.render_slices(&rc, line, start, margin, images);
+            self.render_slices(&rc, line, start, margin, images, false);
             raterm::trace!("rendered {row}");
             rows[row] = Some(Row {
                 line: line.clone(),
@@ -547,9 +556,9 @@ impl View {
 }
 
 impl View {
-    /// Draws the slices of images cells of a line show, over their text, at
-    /// height `y` of `cr`: an image keeps its size in cells, whatever the
-    /// zoom.
+    /// Draws the slices of images cells of a line show, those under the
+    /// text or over it, at height `y` of `cr`: an image keeps its size in
+    /// cells, whatever the zoom.
     fn render_slices(
         &self,
         cr: &cairo::Context,
@@ -557,6 +566,7 @@ impl View {
         start: usize,
         y: f64,
         images: &Images,
+        under: bool,
     ) {
         let (cw, ch) = self.cell;
         let end = start + self.size.0 as usize;
@@ -565,48 +575,80 @@ impl View {
             let (from, to) = (shown.at.max(start), (shown.at + shown.len).min(end));
             if from < to
                 && let Some(image) = images.get(slice.image)
+                && image.under == under
                 && let Some(surface) = self.surface(slice.image, image)
             {
                 let (iw, ih) = image.cell;
-                let x = PAD_X + (from - start) as f64 * cw;
+                let (x, w) = (PAD_X + (from - start) as f64 * cw, (to - from) as f64 * cw);
+                // Where the cell `from` starts in the image's pixels.
+                let col = (slice.col as usize + from - shown.at) as f64;
+                let (sx, sy) = (
+                    col * iw - image.offset.0,
+                    slice.row as f64 * ih - image.offset.1,
+                );
+                let (left, top, sw, sh) = image.source;
                 cr.save().ok();
-                cr.rectangle(x, y, (to - from) as f64 * cw, ch);
+                cr.rectangle(x, y, w, ch);
                 cr.clip();
                 cr.translate(x, y);
                 cr.scale(cw / iw, ch / ih);
-                let sx = (slice.col as usize + from - shown.at) as f64 * iw;
-                let _ = cr.set_source_surface(&surface, -sx, -(slice.row as f64) * ih);
+                cr.translate(-sx - left as f64, -sy - top as f64);
+                cr.rectangle(left as f64, top as f64, sw as f64, sh as f64);
+                cr.clip();
+                let _ = cr.set_source_surface(&surface, 0.0, 0.0);
+                // Smooth when enlarged, as kitty draws them.
+                cr.source().set_filter(cairo::Filter::Bilinear);
                 let _ = cr.paint();
                 cr.restore().ok();
             }
         }
     }
 
-    /// The surface of an image, made when it first shows.
+    /// The surface of an image, made when it first shows; PNG is decoded
+    /// by gdk-pixbuf's PNG loader only, so that no other loader reads what a
+    /// program sent.
     fn surface(&self, id: u32, image: &Image) -> Option<cairo::ImageSurface> {
         let mut images = self.images.borrow_mut();
         if let Some(surface) = images.get(&id) {
-            return Some(surface.clone());
+            return surface.clone();
         }
-        let (w, h) = (image.width as i32, image.height as i32);
-        let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
-        let stride = surface.stride() as usize;
-        {
-            let mut data = surface.data().ok()?;
-            for (row, pixels) in image.pixels.chunks(image.width).enumerate() {
-                let bytes = pixels.iter().flat_map(|p| p.to_ne_bytes());
-                for (dst, b) in data[row * stride..].iter_mut().zip(bytes) {
-                    *dst = b;
+        let data = &image.data;
+        let (w, h) = (data.width as i32, data.height as i32);
+        let made = (|| {
+            let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
+            match &data.pixels {
+                Pixels::Argb(pixels) => {
+                    let stride = surface.stride() as usize;
+                    let mut bytes = surface.data().ok()?;
+                    for (y, row) in pixels.chunks(data.width).enumerate() {
+                        let row = row.iter().flat_map(|p| p.to_ne_bytes());
+                        for (dst, b) in bytes[y * stride..].iter_mut().zip(row) {
+                            *dst = b;
+                        }
+                    }
+                }
+                Pixels::Png(png) => {
+                    let loader = gtk::gdk_pixbuf::PixbufLoader::with_type("png").ok()?;
+                    let decoded = loader.write(png).and_then(|_| loader.close());
+                    let pixbuf = decoded.ok().and_then(|_| loader.pixbuf())?;
+                    let cr = cairo::Context::new(&surface).ok()?;
+                    cr.set_source_pixbuf(&pixbuf, 0.0, 0.0);
+                    cr.paint().ok()?;
                 }
             }
+            Some(surface)
+        })();
+        if made.is_none() {
+            eprintln!("raterm: image {id} could not be decoded");
         }
-        images.insert(id, surface.clone());
-        Some(surface)
+        images.insert(id, made.clone());
+        made
     }
 }
 
-/// Surfaces of the images in view, by number.
-pub(super) type Surfaces = HashMap<u32, cairo::ImageSurface>;
+/// Surfaces of the images in view, by number; `None` for those that could
+/// not be decoded, not to try again.
+pub(super) type Surfaces = HashMap<u32, Option<cairo::ImageSurface>>;
 
 /// The image of a row of the view, and what it was drawn from.
 pub(super) struct Row {

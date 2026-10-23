@@ -1814,6 +1814,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "comrak",
+ "flate2",
  "gtk",
  "portable-pty",
  "serde",

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use alacritty_terminal::event::{Event as TermEvent, EventListener};
@@ -11,7 +12,8 @@ pub use alacritty_terminal::vte::ansi::CursorShape;
 use alacritty_terminal::vte::ansi::{Color, CursorStyle, NamedColor, Processor};
 use serde::Serialize;
 
-use crate::graphics::{Image, Images, Slice, sixel};
+use crate::graphics::kitty::{self, Command};
+use crate::graphics::{Data, Image, Images, Pixels, Slice, sixel};
 use crate::history::{self, Entry, History};
 use crate::media::Media;
 use crate::rich::{Block, Filter, Piece};
@@ -223,6 +225,7 @@ pub struct Terminal {
     pub media: Media,
     /// The images cells show.
     pub images: Images,
+    chunks: kitty::Chunks,
     /// Cells changed out of `alacritty_terminal`'s sight, which tracks the
     /// lines it changes: the whole screen is rendered again.
     full: bool,
@@ -258,6 +261,7 @@ impl Terminal {
             filter: Filter::default(),
             media: Media::default(),
             images: Images::default(),
+            chunks: kitty::Chunks::default(),
             full: false,
             history: History::default(),
             screen: Vec::new(),
@@ -307,6 +311,7 @@ impl Terminal {
                     let _ = self.replies.send(TermEvent::PtyWrite(reply));
                 }
                 Piece::Sixel(data) => changed |= self.place_sixel(&data),
+                Piece::Kitty(data) => changed |= self.kitty(&data),
             }
         }
         self.update(changed)
@@ -510,20 +515,32 @@ impl Terminal {
         let Some((width, height, pixels)) = sixel::decode(data, (w as usize, h as usize)) else {
             return false;
         };
-        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
-        if alt {
-            self.drop_unseen_alt_images();
-        }
-        let image = self.images.add(Image {
+        let cols = (width as f64 / cw).ceil() as usize;
+        let rows = (height as f64 / ch).ceil() as usize;
+        let data = Arc::new(Data {
             width,
             height,
-            pixels,
-            cell: self.cell,
-            alt,
+            pixels: Pixels::Argb(pixels),
         });
+        let bytes = data.size();
+        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
+        let start = self.place(Image::whole(data, self.cell, alt), bytes, cols, rows);
+        let below = format!("\n\x1b[{}G", start + 1);
+        self.parser.advance(&mut self.term, below.as_bytes());
+        self.drain_history();
+        true
+    }
+
+    /// Marks `cols × rows` cells from the cursor with the slices of `image`,
+    /// counting `bytes` in the quota, a row at a time and scrolling at the
+    /// bottom: the cursor ends on its last row. The column it started at.
+    fn place(&mut self, image: Image, bytes: usize, cols: usize, rows: usize) -> usize {
+        if image.alt {
+            self.drop_unseen_alt_images();
+        }
+        let image = self.images.place(image, bytes);
         let start = self.term.grid().cursor.point.column.0;
-        let cols = ((width as f64 / cw).ceil() as usize).min(self.term.columns() - start);
-        let rows = (height as f64 / ch).ceil() as usize;
+        let cols = cols.min(self.term.columns() - start);
         for row in 0..rows {
             if row > 0 {
                 self.parser.advance(&mut self.term, b"\n");
@@ -538,21 +555,163 @@ impl Terminal {
                 self.term.grid_mut()[line][Column(start + col)].set_hyperlink(Some(slice.mark()));
             }
         }
-        let below = format!("\n\x1b[{}G", start + 1);
-        self.parser.advance(&mut self.term, below.as_bytes());
-        self.drain_history();
         self.full = true;
+        start
+    }
+
+    /// Runs a command of kitty's graphics protocol, and answers it. False
+    /// when nothing changed.
+    fn kitty(&mut self, data: &[u8]) -> bool {
+        let Some((mut cmd, payload)) = self.chunks.feed(data) else {
+            return false;
+        };
+        let (changed, error) = match cmd.action {
+            b't' | b'T' | b'q' => match kitty::decode(&cmd, &payload) {
+                Err(error) => (false, Some(error)),
+                Ok(_) if cmd.action == b'q' => (false, None),
+                Ok(data) => {
+                    if cmd.number != 0 {
+                        let picked = (cmd.id != 0).then_some(cmd.id);
+                        cmd.id = self.images.number(cmd.number, picked);
+                    }
+                    let data = Arc::new(data);
+                    if cmd.id != 0 {
+                        self.images.store(cmd.id, data.clone());
+                    }
+                    (cmd.action == b'T' && self.put(&cmd, data), None)
+                }
+            },
+            b'p' => {
+                if cmd.id == 0 {
+                    cmd.id = self.images.numbered(cmd.number).unwrap_or(0);
+                }
+                match self.images.stored(cmd.id).cloned() {
+                    Some(data) => (self.put(&cmd, data), None),
+                    None => (false, Some("ENOENT:no image with this id or number")),
+                }
+            }
+            b'd' => return self.delete(&cmd),
+            _ => return false,
+        };
+        if let Some(reply) = cmd.reply(error) {
+            let _ = self.replies.send(TermEvent::PtyWrite(reply));
+        }
+        changed
+    }
+
+    /// Puts kitty's image at the cursor, which ends on its last row, in the
+    /// column after it. False when nothing changed.
+    fn put(&mut self, cmd: &Command, data: Arc<Data>) -> bool {
+        let (cw, ch) = self.cell;
+        if cw < 1.0 || ch < 1.0 || cmd.placeholders {
+            return false;
+        }
+        let (x, y) = (cmd.source.0.min(data.width), cmd.source.1.min(data.height));
+        let part = |asked: usize, left: usize| if asked == 0 { left } else { asked.min(left) };
+        let (w, h) = (
+            part(cmd.source.2, data.width - x),
+            part(cmd.source.3, data.height - y),
+        );
+        if w == 0 || h == 0 {
+            return false;
+        }
+        // Pixels of the terminal per pixel of the image: the cells asked
+        // for, one of them keeping the aspect ratio.
+        let (sx, sy) = match (cmd.cols, cmd.rows) {
+            (0, 0) => (1.0, 1.0),
+            (c, 0) => (c as f64 * cw / w as f64, c as f64 * cw / w as f64),
+            (0, r) => (r as f64 * ch / h as f64, r as f64 * ch / h as f64),
+            (c, r) => (c as f64 * cw / w as f64, r as f64 * ch / h as f64),
+        };
+        let (ox, oy) = (cmd.offset.0 as f64, cmd.offset.1 as f64);
+        let cols = match cmd.cols {
+            0 => ((w as f64 * sx + ox) / cw).ceil() as usize,
+            c => c,
+        };
+        let rows = match cmd.rows {
+            0 => ((h as f64 * sy + oy) / ch).ceil() as usize,
+            r => r,
+        };
+        if cmd.placement != 0 {
+            let same = Some((cmd.id, cmd.placement));
+            self.images.retain(|_, image| image.kitty != same);
+        }
+        // An image without an id is only placed: it counts as one.
+        let bytes = if cmd.id == 0 { data.size() } else { 0 };
+        let image = Image {
+            data,
+            source: (x, y, w, h),
+            cell: (cw / sx, ch / sy),
+            offset: (ox / sx, oy / sy),
+            under: cmd.z < 0,
+            alt: self.term.mode().contains(TermMode::ALT_SCREEN),
+            kitty: (cmd.id != 0).then_some((cmd.id, cmd.placement)),
+        };
+        let at = self.term.grid().cursor.point;
+        let start = self.place(image, bytes, cols, rows);
+        let after = match cmd.stay {
+            true => format!("\x1b[{};{}H", at.line.0 + 1, at.column.0 + 1),
+            false => format!("\x1b[{}G", start + cols + 1),
+        };
+        self.parser.advance(&mut self.term, after.as_bytes());
+        self.drain_history();
         true
+    }
+
+    /// Deletes kitty's placements, and with an uppercase letter their images
+    /// too. False when nothing changed.
+    fn delete(&mut self, cmd: &Command) -> bool {
+        let id = match cmd.delete {
+            b'n' | b'N' => self.images.numbered(cmd.number),
+            _ => Some(cmd.id),
+        };
+        let cursor = self.term.grid().cursor.point;
+        let gone: Vec<(u32, u32)> = match cmd.delete {
+            b'a' | b'A' => self.shown(|_| true),
+            b'c' | b'C' => self.shown(|at| at == cursor),
+            b'i' | b'I' | b'n' | b'N' => (self.images.iter())
+                .filter(|(_, image)| {
+                    matches!(image.kitty, Some((i, p)) if Some(i) == id
+                        && (cmd.placement == 0 || p == cmd.placement))
+                })
+                .map(|(n, _)| n)
+                .collect(),
+            _ => return false,
+        }
+        .into_iter()
+        .filter_map(|n| Some((n, self.images.get(n)?.kitty?.0)))
+        .collect();
+        let placed: HashSet<u32> = gone.iter().map(|&(n, _)| n).collect();
+        self.images.retain(|n, _| !placed.contains(&n));
+        if cmd.delete.is_ascii_uppercase() {
+            for i in gone.iter().map(|&(_, i)| i).chain(id) {
+                self.images.unstore(i);
+            }
+        }
+        self.full |= !gone.is_empty();
+        !gone.is_empty()
+    }
+
+    /// The placed images the screen shows, in the cells `at` keeps.
+    fn shown(&self, at: impl Fn(alacritty_terminal::index::Point) -> bool) -> HashSet<u32> {
+        let grid = self.term.grid();
+        let mut shown = HashSet::new();
+        for y in 0..grid.screen_lines() {
+            let line = GridLine(y as i32);
+            for (x, cell) in grid[line][..].iter().enumerate() {
+                if let Some(slice) = cell.hyperlink().as_ref().and_then(Slice::of)
+                    && at(alacritty_terminal::index::Point::new(line, Column(x)))
+                {
+                    shown.insert(slice.image);
+                }
+            }
+        }
+        shown
     }
 
     /// Drops the images of the alternate screen that it no longer shows.
     fn drop_unseen_alt_images(&mut self) {
-        let grid = self.term.grid();
-        let seen: HashSet<u32> = (0..grid.screen_lines())
-            .flat_map(|y| grid[GridLine(y as i32)][..].iter())
-            .filter_map(|cell| Slice::of(&cell.hyperlink()?))
-            .map(|slice| slice.image)
-            .collect();
+        let seen = self.shown(|_| true);
         self.images
             .retain(|id, image| !image.alt || seen.contains(&id));
     }
@@ -1194,7 +1353,7 @@ mod tests {
         // The cursor's cell is in the text.
         assert_eq!(term.screen()[3].text(), " x ");
         assert_eq!(
-            term.images.get(0).map(|i| (i.width, i.height)),
+            term.images.get(0).map(|i| (i.data.width, i.data.height)),
             Some((4, 12))
         );
     }
@@ -1222,7 +1381,7 @@ mod tests {
         let mut term = sixel_term(1, 2);
         term.advance(SIXEL);
         let image = term.images.get(0).unwrap();
-        assert_eq!((image.width, image.height), (2, 8));
+        assert_eq!((image.data.width, image.data.height), (2, 8));
     }
 
     #[test]
@@ -1259,6 +1418,77 @@ mod tests {
                 .reply,
             "\x1b[?1;0;1024S\x1b[?2;0;160;96S\x1b[?3;1;0S\x1b[?62;4;22c"
         );
+    }
+
+    /// As kitty 0.49 answered on Oct 23, 2026, with a cell of 9 × 18 pixels
+    /// and 30 rows; kitty's texts of errors are its own.
+    #[test]
+    fn kitty_places_and_answers_as_kitty() {
+        let mut term = Terminal::new(60, 30);
+        term.resize(60, 30, (9.0, 18.0));
+        let red = |n: usize| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.encode([255, 0, 0].repeat(n))
+        };
+        let mut run = |input: String| term.advance(input.as_bytes()).reply;
+        assert_eq!(
+            run("\x1b[3;5H\x1b_Ga=T,f=24,s=2,v=2,c=4,r=3,i=1;/wAA/wAA/wAA/wAA\x1b\\\x1b[6n".into()),
+            "\x1b_Gi=1;OK\x1b\\\x1b[5;9R"
+        );
+        let big = red(800);
+        assert_eq!(
+            run(format!(
+                "\x1b[3;5H\x1b_Ga=T,f=24,s=20,v=40,i=2,q=1;{big}\x1b\\\x1b[6n"
+            )),
+            "\x1b[5;8R"
+        );
+        assert_eq!(
+            run("\x1b[3;5H\x1b_Ga=p,i=1,c=4,r=3,C=1,q=1\x1b\\\x1b[6n".into()),
+            "\x1b[3;5R"
+        );
+        assert_eq!(
+            run("\x1b[50;5H\x1b_Ga=p,i=1,c=4,r=3,q=1\x1b\\\x1b[6n".into()),
+            "\x1b[30;9R"
+        );
+        assert_eq!(
+            run("\x1b_Ga=p,i=99\x1b\\".into()),
+            "\x1b_Gi=99;ENOENT:no image with this id or number\x1b\\"
+        );
+        let numbered = run("\x1b_Ga=t,f=24,s=2,v=2,I=7;/wAA/wAA/wAA/wAA\x1b\\".into());
+        assert!(numbered.starts_with("\x1b_Gi=") && numbered.ends_with(",I=7;OK\x1b\\"));
+        assert_eq!(
+            run("\x1b_Ga=t,f=24,s=3,v=2,i=5;/wAA/wAA/wAA/wAA\x1b\\".into()),
+            "\x1b_Gi=5;ENODATA:insufficient image data\x1b\\"
+        );
+        assert_eq!(
+            run("\x1b_Ga=t,t=s,f=24,s=1,v=1,i=6;L3NobQ==\x1b\\".into()),
+            "\x1b_Gi=6;EINVAL:only direct transmission is supported\x1b\\"
+        );
+        assert_eq!(
+            run("\x1b_Ga=q,i=31,s=1,v=1,t=d,f=24;AAAA\x1b\\".into()),
+            "\x1b_Gi=31;OK\x1b\\"
+        );
+        assert_eq!(run("\x1b_Ga=d,d=i,i=1\x1b_Ga=x,i=32\x1b\\".into()), "");
+    }
+
+    #[test]
+    fn kitty_deletes_placements_and_images() {
+        let mut term = Terminal::new(20, 10);
+        term.resize(20, 10, (2.0, 4.0));
+        let put = "\x1b_Ga=T,f=24,s=1,v=1,c=2,r=1,i=4,p=1,q=2;/wAA\x1b\\";
+        term.advance(put.as_bytes());
+        // The same placement again replaces it.
+        term.advance(format!("\r\n{put}").as_bytes());
+        term.advance(b"\r\n\x1b_Ga=p,i=4,p=2,q=2\x1b\\");
+        let placed = |term: &Terminal| term.images.iter().count();
+        assert_eq!(placed(&term), 2);
+        term.advance(b"\x1b_Ga=d,d=i,i=4,p=2\x1b\\");
+        assert_eq!(placed(&term), 1);
+        assert!(term.images.stored(4).is_some());
+        term.advance(b"\x1b_Ga=d,d=I,i=4\x1b\\");
+        assert_eq!(placed(&term), 0);
+        assert!(term.images.stored(4).is_none());
+        assert_eq!(term.images.removed, 3);
     }
 
     #[test]

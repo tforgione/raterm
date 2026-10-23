@@ -121,8 +121,10 @@ struct View {
     /// size of the view (see draw.rs).
     image: Option<gdk_pixbuf::Pixbuf>,
     backdrop: RefCell<Option<cairo::ImageSurface>>,
-    /// Surfaces of the images cells show.
+    /// Surfaces of the images cells show, and how many times images were
+    /// removed when the rows were drawn.
     images: RefCell<draw::Surfaces>,
+    removed: Cell<u64>,
     /// The image shown full window, made on its first use.
     viewer: Option<WebView>,
     /// `[images] max_height` of the configuration.
@@ -234,6 +236,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         image: draw::load_image(&config.background),
         backdrop: RefCell::default(),
         images: RefCell::default(),
+        removed: Cell::default(),
         viewer: None,
         max_image_lines: config.images.max_height,
         media,
