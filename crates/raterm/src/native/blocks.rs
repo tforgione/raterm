@@ -86,27 +86,25 @@ impl View {
     }
 
     /// Shows an image full window over the terminal, until a click or Escape.
+    /// A new web view each time: one kept hidden showed the previous image
+    /// for a frame, before painting the next one.
     pub(super) fn open_viewer(&mut self, image: &Rendered) {
-        if self.viewer.is_none() {
-            let viewer = self.web_view();
-            if let Some(settings) = WebViewExt::settings(&viewer) {
-                settings.set_enable_javascript_markup(false);
-            }
-            viewer.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
-            viewer.set_can_focus(false);
-            viewer.set_no_show_all(true);
-            let me = self.me.clone();
-            viewer.connect_button_press_event(move |_, _| {
-                if let Some(view) = me.upgrade() {
-                    view.borrow_mut().close_viewer();
-                }
-                glib::Propagation::Stop
-            });
-            viewer.connect_scroll_event(|_, _| glib::Propagation::Stop);
-            self.overlay.add_overlay(&viewer);
-            self.viewer = Some(viewer);
+        self.close_viewer();
+        let viewer = self.web_view();
+        if let Some(settings) = WebViewExt::settings(&viewer) {
+            settings.set_enable_javascript_markup(false);
         }
-        let viewer = self.viewer.as_ref().unwrap();
+        viewer.set_background_color(&gdk::RGBA::new(0.0, 0.0, 0.0, 0.0));
+        viewer.set_can_focus(false);
+        let me = self.me.clone();
+        viewer.connect_button_press_event(move |_, _| {
+            if let Some(view) = me.upgrade() {
+                view.borrow_mut().close_viewer();
+            }
+            glib::Propagation::Stop
+        });
+        viewer.connect_scroll_event(|_, _| glib::Propagation::Stop);
+        self.overlay.add_overlay(&viewer);
         // SVGs have no natural size worth keeping: they fill the window.
         let size = if image.kind == Kind::Svg {
             "width: 95%; height: 95%; object-fit: contain;"
@@ -128,12 +126,12 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             None,
         );
         viewer.show();
+        self.viewer = Some(viewer);
     }
 
     pub(super) fn close_viewer(&mut self) {
-        if let Some(viewer) = &self.viewer {
-            viewer.hide();
-            viewer.load_html("", None);
+        if let Some(viewer) = self.viewer.take() {
+            self.overlay.remove(&viewer);
         }
         self.area.grab_focus();
     }
