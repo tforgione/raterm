@@ -1,0 +1,96 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": {
+    "text": "vtebench, time to read 1 MiB from the pty",
+    "subtitle": "ms per sample, median, lower is better; each benchmark on its own scale"
+  },
+  "data": {
+    "url": "vtebench.csv",
+    "format": {
+      "type": "csv",
+      "parse": {
+        "ms": "number"
+      }
+    }
+  },
+  "facet": {
+    "field": "benchmark",
+    "type": "nominal",
+    "title": null,
+    "header": {
+      "labelFontSize": 11,
+      "labelAnchor": "start"
+    }
+  },
+  "columns": 4,
+  "resolve": {
+    "scale": {
+      "x": "independent"
+    }
+  },
+  "spec": {
+    "width": 150,
+    "height": {
+      "step": 12
+    },
+    "encoding": {
+      "y": {
+        "field": "terminal",
+        "type": "nominal",
+        "sort": [
+          "raterm",
+          "gnome-terminal",
+          "terminator",
+          "alacritty",
+          "kitty",
+          "foot"
+        ],
+        "title": null
+      },
+      "x": {
+        "field": "ms",
+        "type": "quantitative",
+        "title": null,
+        "axis": {
+          "tickCount": 3
+        }
+      }
+    },
+    "layer": [
+      {
+        "mark": "bar",
+        "encoding": {
+          "color": {
+            "field": "terminal",
+            "type": "nominal",
+            "sort": [
+              "raterm",
+              "gnome-terminal",
+              "terminator",
+              "alacritty",
+              "kitty",
+              "foot"
+            ],
+            "title": null,
+            "legend": null
+          }
+        }
+      },
+      {
+        "mark": {
+          "type": "text",
+          "align": "left",
+          "dx": 3,
+          "fontSize": 9
+        },
+        "encoding": {
+          "text": {
+            "field": "ms",
+            "type": "quantitative",
+            "format": ".0f"
+          }
+        }
+      }
+    ]
+  }
+}

@@ -6,11 +6,13 @@ script running inside it (`inner` mode) and taking orders from a FIFO. What
 the screen shows is read back with `grim`, one pixel at a time: a run is over
 when the pixel at the center of the window turns to the expected color. One
 capture takes one compositor frame, so every time is precise to one frame.
+vtebench, Alacritty's benchmark of the speed at which a terminal reads its
+pty, runs in the window too, built at a fixed commit in ~/.cache/raterm-bench.
 Latency is measured with `probe/` instead, which gets from the compositor when
 the frame showing the pixel was presented: the start of grim and a capture
 that missed the frame would weigh more than the terminal.
 
-    BENCH_MIB=4 bench.py run [--only startup,latency,throughput] [--runs N] [--out DIR]
+    BENCH_MIB=4 bench.py run [--only startup,latency,throughput,vtebench] [--runs N] [--out DIR]
     bench.py report DIR     # writes DIR/*.csv and prints Markdown tables
     charts/build.sh DIR OUT # both, plus the charts in OUT
     page.py DIR WIKI        # the Performance pages of the wiki
@@ -35,6 +37,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 RATERM = ROOT / "target/release/raterm"
 PROBE = ROOT / "extra/bench/probe"
+# Out of the repository, where cargo would take it for a member of the workspace.
+VTEBENCH = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "raterm-bench/vtebench"
+VTEBENCH_REV = "ead80032e57dee2e75f0b51f2ea67528647d9944"
+# Seconds per vtebench benchmark, 10 by default: 12 benchmarks per window.
+VTEBENCH_SECS = 5
 FONT, SIZE = "UbuntuMono Nerd Font", 11
 WIDTH, HEIGHT, X, Y = 1200, 800, 60, 60
 WORKLOAD_MIB = int(os.environ.get("BENCH_MIB", 8))
@@ -115,6 +122,14 @@ def inner(ctl):
                     md = f"**Block {i}**: some text with `code` and a [link](https://example.com)."
                     write(f"\x1b]7117;md;{base64.b64encode(md.encode()).decode()}\x07")
                 (ctl / "blocks").write_text("done")
+            elif cmd == "vtebench":
+                subprocess.run(
+                    [VTEBENCH / "target/release/vtebench", "--silent", "--benchmarks", VTEBENCH / "benchmarks",
+                     "--max-secs", str(VTEBENCH_SECS), "--dat", ctl / "vtebench.dat"],
+                    cwd=VTEBENCH,
+                )
+                paint(BLACK)
+                (ctl / "vtebench").write_text("done")
             elif cmd == "quit":
                 return
 
@@ -558,6 +573,33 @@ def bench_blocks(term, scratch, record):
             w.close()
 
 
+def bench_vtebench(term, scratch, record):
+    """vtebench's benchmarks, the median time of their samples (1 MiB or more each)."""
+    w = Window(term, scratch).ready()
+    try:
+        wait_pixel(*w.center, BLACK, 20)
+        time.sleep(0.5)
+        w.send("vtebench")
+        end = time.time() + 12 * (VTEBENCH_SECS + 30)
+        while not (w.ctl / "vtebench").exists():
+            if not w.alive() or time.time() > end:
+                raise TimeoutError(f"vtebench never finished in {term} (see {w.ctl})")
+            time.sleep(0.5)
+        names, *samples = [line.split() for line in (w.ctl / "vtebench.dat").read_text().splitlines()]
+        for i, name in enumerate(names):
+            ms = [float(s[i]) for s in samples if i < len(s) and s[i] != "_"]
+            record(benchmark=name, ms=statistics.median(ms), samples=len(ms))
+    finally:
+        w.close()
+
+
+def build_vtebench():
+    if not VTEBENCH.exists():
+        subprocess.run(["git", "clone", "--quiet", "https://github.com/alacritty/vtebench", VTEBENCH], check=True)
+    subprocess.run(["git", "-C", VTEBENCH, "checkout", "--quiet", VTEBENCH_REV], check=True)
+    subprocess.run(["cargo", "build", "--release", "--quiet", "--manifest-path", VTEBENCH / "Cargo.toml"], check=True)
+
+
 def run(args):
     # Absolute: the program in the windows does not start in this directory,
     # and opens the workloads by their paths.
@@ -568,6 +610,8 @@ def run(args):
     files = workloads(out / f"workloads-{WORKLOAD_MIB}") if {"throughput", "scrollback"} & set(args.only) else {}
     if {"latency", "scrollback"} & set(args.only):
         subprocess.run(["cargo", "build", "--release", "--quiet", "--manifest-path", PROBE / "Cargo.toml"], check=True)
+    if "vtebench" in args.only:
+        build_vtebench()
     hz = refresh_rate()
     results = out / "results.jsonl"
     with open(results, "a") as log:
@@ -593,6 +637,8 @@ def run(args):
                             bench_scrollback(term, record, out, files["ascii"])
                         elif bench == "blocks":
                             bench_blocks(term, scratch, record)
+                        elif bench == "vtebench":
+                            bench_vtebench(term, scratch, record)
                     except TimeoutError as e:
                         print(f"{bench} {term} run {n}: {e}", file=sys.stderr, flush=True)
     print(f"results in {results}")
@@ -643,6 +689,18 @@ def report(args):
         display.append([wl, f"{mib:.1f}", *(f"{d:.3f} s ({mib / d:.3g} MiB/s)" for d in ds), *ratios])
     write_csv("throughput", ["terminal", "workload", "displayed_mib_per_s", "drained_mib_per_s"], csv)
 
+    vt = pick("vtebench")
+    benchmarks = list(dict.fromkeys(r["benchmark"] for r in vt))
+    csv, vtable = [], []
+    for b in benchmarks:
+        by = {t: rs for t in terms if (rs := pick("vtebench", terminal=t, benchmark=b))}
+        ms = {t: med(rs, "ms") for t, rs in by.items()}
+        csv += [[t, b, round(v, 2)] for t, v in ms.items()]
+        best = min(v for t, v in ms.items() if t != terms[0])
+        vtable.append([b, *(f"{ms[t]:.1f}" if t in ms else "" for t in terms), f"×{ms[terms[0]] / best:.1f}"])
+    if vt:
+        write_csv("vtebench", ["terminal", "benchmark", "ms"], csv)
+
     lat = pick("latency")
     setup = lambda r: f"{r['terminal']} @ {round(r['hz'])} Hz"
     write_csv("latency", ["setup", "latency_ms"], [[setup(r), round(r["latency_ms"], 2)] for r in lat])
@@ -684,6 +742,10 @@ def report(args):
         write_csv("scrollback", ["terminal", "lines", "latency_ms", "pss_mib"], csv)
         print("### Scrollback\n")
         table(["terminal", "lines", "filled in (s)", "PSS (MiB)", "latency (ms)", "4 MiB more (s)", "runs"], lines)
+
+    if vt:
+        print("### vtebench\n")
+        table(["benchmark (ms)", *terms, f"{terms[0]} / fastest other"], vtable)
 
     lines = []
     for n in BLOCKS:

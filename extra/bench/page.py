@@ -98,6 +98,15 @@ others_display = [display(t, wl) for t in others for wl in wls]
 runs = max(r["run"] for r in rows if r["bench"] == "latency") + 1
 sb_runs = max(r["run"] for r in rows if r["bench"] == "scrollback") + 1
 blocks = {n: m("blocks", "pss_mib", terminal="raterm", blocks=n) for n in (20, 200)}
+vt_names = list(dict.fromkeys(r["benchmark"] for r in rows if r["bench"] == "vtebench"))
+vt = lambda t, b: m("vtebench", "ms", terminal=t, benchmark=b)
+# raterm's time against the fastest of the others, per benchmark.
+vt_others = [t for t in others if any(r["bench"] == "vtebench" and r["terminal"] == t for r in rows)]
+vt_ratio = {b: vt("raterm", b) / min(vt(t, b) for t in vt_others) for b in vt_names}
+vt_alacritty = [vt("raterm", b) / vt("alacritty", b) for b in vt_names]
+scrolling = [b for b in vt_names if b.startswith("scrolling") and b != "scrolling_fullscreen"]
+vt_scrolling = [vt(t, b) for t in grids for b in scrolling]
+vt_runs = max(r["run"] for r in rows if r["bench"] == "vtebench") + 1
 tables = lambda anchor: f"Tables: [Performance tables](Performance-tables#{anchor})."
 
 page = f"""# Performance
@@ -117,6 +126,10 @@ foot, with the script `extra/bench/bench.py`.
   so the ratios of the shortest ones are rough. Since the first measures, the fixes of the page,
   M5, those of the core and the native grid (M6) made raterm {span(gains)} times faster (see
   [below](#since-the-first-measures)).
+- **vtebench**, Alacritty's benchmark of the speed at which a terminal reads
+  its pty: raterm takes {span(vt_alacritty, "{:.1f}")} times Alacritty's time, and up to
+  {max(vt_ratio.values()):.0f} times the fastest's: VTE reads the benchmarks that rewrite the grid
+  in a few milliseconds, counted whole by vtebench.
 - **Latency** from a program's output to the screen, at 60 Hz: {lmed["raterm"]:.0f} ms median
   for raterm, {against(lmed, unit=" ms")}; at most {lat["raterm"][-1]:.0f} ms for raterm,
   {max(lat[t][-1] for t in others):.0f} ms for the others.
@@ -141,7 +154,7 @@ foot, with the script `extra/bench/bench.py`.
   1200x800 floating window, without menu bar (GNOME Terminal) or title bar
   (Terminator). The grids differ with each terminal's cells and margins:
   {grid}.
-- {runs} runs of everything per terminal ({sb_runs} for the scrollback), on a desktop in
+- {runs} runs of everything per terminal ({sb_runs} for the scrollback, {vt_runs} for vtebench), on a desktop in
   use: medians are given.
 
 ## Method
@@ -162,6 +175,13 @@ frame, without the time grim takes to start.
   up. The workloads are plain text, numbered short lines (`seq`), text with
   256 colors, truecolor text with backgrounds, CJK with emoji, and random
   cursor moves without scrolling (like a full-screen program).
+- **vtebench** ([alacritty/vtebench](https://github.com/alacritty/vtebench),
+  commit `ead8003`): the program runs it in the window, at most 5 seconds per
+  benchmark rather than 10. Each sample is the time to write the output of a
+  benchmark, repeated to at least 1 MiB, to the pty; vtebench times it from
+  the inside, so it measures how fast the terminal reads, not when it draws.
+  The median of the samples is given, in whole milliseconds as vtebench
+  counts them.
 - **Latency**: the program paints a small block in another color when it is
   told to; the time is from the order to the presentation of the frame
   showing the block, with a random pause between samples to spread them over
@@ -204,6 +224,23 @@ others (the terminal state), and the screen catches up {span(catch, "{:.2f}")} s
 CPU time is about {cpu_ratio:.1f} times the time to display.
 
 {tables("throughput")}
+
+### vtebench
+
+{img("vtebench")}
+
+These are the drain times of the throughput measures, on vtebench's
+workloads. The `scrolling` ones but `scrolling_fullscreen` write `y` lines,
+in the whole screen or in a scroll region: all terminals take
+{span(vt_scrolling)} ms, where a pty read by no terminal takes about 135 ms
+for 1 MiB of them (half a million lines): the pty is the bottleneck, VTE
+adds a little. The others rewrite the
+grid without scrolling (`*_cells`, `cursor_motion`, `unicode`), or scroll
+full lines (`scrolling_fullscreen`): there VTE is the fastest, raterm
+about as fast as Alacritty and foot, and kitty the slowest. Their times
+are a few milliseconds, which vtebench counts whole: their ratios are rough.
+
+{tables("vtebench")}
 
 ### Latency
 
@@ -268,7 +305,8 @@ The windows open floating at the top left of the current workspace and do not
 take the focus; the screen must stay on that workspace until the end, and
 must not lock, as a hidden window cannot be read back (its run times out and
 is skipped). The script needs `grim`, Hyprland and cargo (it builds
-`extra/bench/probe`), and only ever closes the windows it opened.
+`extra/bench/probe`, and vtebench in `~/.cache/raterm-bench`), and only ever
+closes the windows it opened.
 `extra/bench/trace.py` splits raterm's latency into the stages of a redraw
 (see [Development](Development)).
 
@@ -276,6 +314,7 @@ is skipped). The script needs `grim`, Hyprland and cargo (it builds
 cargo build --release
 BENCH_MIB=4 extra/bench/bench.py run --only startup,latency,throughput,blocks --runs 5 --out bench-results
 BENCH_MIB=4 extra/bench/bench.py run --only scrollback --runs 2 --out bench-results
+extra/bench/bench.py run --only vtebench --runs 3 --out bench-results
 extra/bench/charts/build.sh bench-results .wiki/bench   # tables and charts
 extra/bench/page.py bench-results .wiki                 # these pages
 ```
@@ -289,9 +328,10 @@ another screen (at 120 Hz for instance) adds to the same report.
 annex = f"""# Performance tables
 
 The measures behind the charts of [Performance](Performance), where the
-setup and the method are: medians over {runs} runs ({sb_runs} for the scrollback).
+setup and the method are: medians over {runs} runs ({sb_runs} for the scrollback,
+{vt_runs} for vtebench).
 """
-for name in ["Throughput", "Latency", "Startup and memory", "Scrollback", "Blocks"]:
+for name in ["Throughput", "vtebench", "Latency", "Startup and memory", "Scrollback", "Blocks"]:
     annex += f"\n## {name}\n\n{sections[name].strip()}\n"
 annex += f"\n## Since the first measures\n\nraterm's time to display 4 MiB, on Oct 20, 2026 and now:\n\n{chr(10).join(before)}\n"
 (wiki / "Performance-tables.md").write_text(annex)
