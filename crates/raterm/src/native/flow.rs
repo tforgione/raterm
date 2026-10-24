@@ -19,6 +19,7 @@ use super::keys::{self, Mods};
 use super::runs::cells;
 use super::search::Search;
 use super::select::{Pos, Selection};
+use super::system::Which;
 
 pub(super) const PAD_X: f64 = 4.0;
 pub(super) const PAD_Y: f64 = 2.0;
@@ -53,19 +54,12 @@ pub(super) struct Spot {
 pub(super) enum Action {
     /// The flow scrolled: lay it out again.
     Layout,
-    Copy(Clipboard),
-    Paste(Clipboard),
+    Copy(Which),
+    Paste(Which),
     NewWindow,
     OpenSearch,
     /// The new step of the zoom.
     Zoom(i32),
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Clipboard {
-    Clipboard,
-    /// The primary selection, where there is one (Linux).
-    Primary,
 }
 
 /// A step of the search in a block.
@@ -415,9 +409,9 @@ impl Flow {
     /// lets the key reach the program.
     pub(super) fn action(&mut self, action: &str) -> Option<Action> {
         Some(match action {
-            "copy" => Action::Copy(Clipboard::Clipboard),
-            "paste" => Action::Paste(Clipboard::Clipboard),
-            "paste_selection" => Action::Paste(Clipboard::Primary),
+            "copy" => Action::Copy(Which::Clipboard),
+            "paste" => Action::Paste(Which::Clipboard),
+            "paste_selection" => Action::Paste(Which::Primary),
             "scroll_page_up" | "scroll_page_down" => {
                 if self.session.read(|t| t.alt_screen()) {
                     return None;

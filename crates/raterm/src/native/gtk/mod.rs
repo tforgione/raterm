@@ -23,13 +23,14 @@ use tao::event::{Event, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
-use webkit2gtk::{WebView, WebViewExt};
+use webkit2gtk::WebView;
 
-use crate::native::flow::{Action, Clipboard, Find, Flow, PAD_Y};
+use crate::native::blocks::{BlockView, block_style, css_fonts};
+use crate::native::flow::{Action, Find, Flow, PAD_Y};
 use crate::native::keys::{self, encode};
 use crate::native::select::{Selection, Unit};
+use crate::native::system::{Clipboard, Which, new_window, open_url};
 use crate::native::theme;
-use blocks::block_style;
 use draw::measure;
 use input::mods;
 
@@ -251,7 +252,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                         view.area.queue_draw();
                     }
                 }
-                2 => view.paste(Clipboard::Primary),
+                2 => view.paste(Which::Primary),
                 _ => {}
             }
             glib::Propagation::Stop
@@ -299,7 +300,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                         open_url(&url);
                     }
                 }
-                view.copy(Clipboard::Primary);
+                view.copy(Which::Primary);
             }
             glib::Propagation::Stop
         });
@@ -555,25 +556,21 @@ impl View {
 
     /// Copies the selection to the clipboard or the primary selection; that
     /// of a block, the web view copies itself.
-    fn copy(&self, which: Clipboard) {
+    fn copy(&self, which: Which) {
         let Some(text) = self.flow.selected_text() else {
-            if which == Clipboard::Clipboard
+            if which == Which::Clipboard
                 && let Some(view) = self.flow.block_selected.and_then(|e| self.blocks.get(&e))
             {
-                view.execute_editing_command("Copy");
+                view.copy();
             }
             return;
         };
-        gtk::Clipboard::get(&atom(which)).set_text(&text);
+        GtkClipboard.set(which, &text);
     }
 
-    fn paste(&self, which: Clipboard) {
+    fn paste(&self, which: Which) {
         let session = self.session.clone();
-        gtk::Clipboard::get(&atom(which)).request_text(move |_, text| {
-            if let Some(text) = text {
-                session.paste(text);
-            }
-        });
+        GtkClipboard.paste(which, move |text| session.paste(&text));
     }
 
     fn scroll_to_end(&mut self) {
@@ -594,7 +591,7 @@ impl View {
                 self.blocks.insert(spot.entry, view);
             }
             let view = &self.blocks[&spot.entry];
-            view.set_size_request(spot.width, spot.height);
+            view.place(spot.x, spot.y, spot.width, spot.height);
             self.fixed.move_(view, spot.x, spot.y);
         }
         // Blocks out of view go; they are made again when they come back.
@@ -657,25 +654,30 @@ impl View {
     }
 }
 
-fn atom(which: Clipboard) -> gdk::Atom {
-    match which {
-        Clipboard::Clipboard => gdk::SELECTION_CLIPBOARD,
-        Clipboard::Primary => gdk::SELECTION_PRIMARY,
+/// GTK's clipboard and primary selection.
+struct GtkClipboard;
+
+impl GtkClipboard {
+    fn get(which: Which) -> gtk::Clipboard {
+        gtk::Clipboard::get(&match which {
+            Which::Clipboard => gdk::SELECTION_CLIPBOARD,
+            Which::Primary => gdk::SELECTION_PRIMARY,
+        })
     }
 }
 
-/// Opens another window, in the same directory as this one's shell.
-fn new_window(cwd: Option<std::path::PathBuf>) {
-    let mut command = match std::env::current_exe() {
-        Ok(exe) => std::process::Command::new(exe),
-        Err(e) => return eprintln!("raterm: cannot find own executable: {e}"),
-    };
-    if let Some(cwd) = cwd {
-        command.current_dir(cwd);
+impl Clipboard for GtkClipboard {
+    fn set(&self, which: Which, text: &str) {
+        Self::get(which).set_text(text);
     }
-    match command.spawn() {
-        Ok(mut child) => drop(thread::spawn(move || child.wait())),
-        Err(e) => eprintln!("raterm: cannot open a new window: {e}"),
+
+    fn paste(&self, which: Which, then: impl FnOnce(String) + 'static) {
+        let mut then = Some(then);
+        Self::get(which).request_text(move |_, text| {
+            if let (Some(text), Some(then)) = (text, then.take()) {
+                then(text.to_owned());
+            }
+        });
     }
 }
 
@@ -695,7 +697,7 @@ fn search_bar(config: &Config) -> gtk::Entry {
          border-radius: 0; box-shadow: none; padding: 2px 6px; min-height: 0; }} \
          entry.none {{ border-color: #{:06x}; }}",
         config.font.size,
-        blocks::css_fonts(&config.font.family, "monospace"),
+        css_fonts(&config.font.family, "monospace"),
         t.fg,
         t.bg,
         t.palette[8],
@@ -709,20 +711,4 @@ fn search_bar(config: &Config) -> gtk::Entry {
         .style_context()
         .add_provider(&provider, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);
     entry
-}
-
-/// Opens a link in the desktop's handler.
-pub(super) fn open_url(url: &str) {
-    // Other schemes (file:, custom app handlers) would let terminal output
-    // launch arbitrary local handlers on a click.
-    if !["http://", "https://", "mailto:"]
-        .iter()
-        .any(|s| url.starts_with(s))
-    {
-        return eprintln!("raterm: refusing to open {url:?}");
-    }
-    match std::process::Command::new("xdg-open").arg(url).spawn() {
-        Ok(mut child) => drop(thread::spawn(move || child.wait())),
-        Err(e) => eprintln!("raterm: xdg-open failed: {e}"),
-    }
 }
