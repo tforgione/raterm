@@ -25,11 +25,15 @@ struct Args {
 
 fn main() -> Result<(), raterm::pty::Error> {
     let args = Args::parse();
-    // WebKitGTK's DMA-BUF renderer dies with "Error 71 (Protocol error)" on
-    // Wayland with Nvidia drivers; fall back to the shared-memory renderer.
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+    // The GPU buffers of WebKitGTK's DMA-BUF renderer make GTK die with
+    // "Error 71 (Protocol error)" on Wayland with Nvidia drivers, and since
+    // 2.54 its fallback renderer paints transparent blocks over themselves:
+    // the DMA-BUF renderer with shared-memory buffers does neither.
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
+        && std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none()
+    {
         // SAFETY: no other thread exists yet.
-        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        unsafe { std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1") };
     }
     let config = Config::load();
     let command = if args.command.is_empty() {

@@ -84,11 +84,12 @@ RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
   webviews sont liées (`related-view`) à une racine cachée pour partager un
   processus. `WebView::with_related_view` du crate 2.0.2 prend une
   référence de trop (critiques GLib) : passer par le builder.
-- Transparente, la webview d'un bloc perdait le reste du bloc en repeignant
-  une sélection : opaque du 22 au 24 octobre 2026. Depuis la grille native,
-  qui dessine le fond sous les blocs, ça ne se reproduit plus ; elle est
-  transparente sauf `[blocks] background`. À revérifier si le fond sous les
-  blocs change.
+- Les blocs transparents bavaient (texte de plus en plus épais) : depuis
+  WebKitGTK 2.54, le moteur de repli (`WEBKIT_DISABLE_DMABUF_RENDERER=1`)
+  repeint une page transparente par-dessus elle-même, et créer une webview
+  dans le processus partagé (visualiseur, bloc qui entre dans la vue) fait
+  repeindre les autres. Reproductible sans souris : créer des webviews
+  liées par un timer et comparer un bloc au pixel près.
 - Les glyphes des polices de secours ont d'autres largeurs et hauteurs : la
   hauteur de ligne est fixée à la cellule mesurée, une ligne dont un glyphe
   manque à la police est dessinée cellule par cellule, et chaque glyphe de
@@ -98,8 +99,10 @@ RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
   blocs (U+2500 à U+259F, sauf les pointillés) sont dessinés par raterm
   (`boxes.rs`), comme le font alacritty et VTE.
 - Les noms de police doivent être entre guillemets en CSS (`Source Serif 4`).
-- Sous Wayland avec Nvidia, le rendu DMA-BUF plante : `main.rs` pose
-  `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+- Sous Wayland avec Nvidia, les tampons GPU du rendu DMA-BUF font planter
+  GTK (`Error 71`) : `main.rs` pose `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`
+  (DMA-BUF en mémoire partagée), pas `WEBKIT_DISABLE_DMABUF_RENDERER`, qui
+  fait baver les blocs transparents (voir plus haut).
 
 ## Tester en vrai
 
