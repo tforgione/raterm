@@ -957,20 +957,22 @@ impl View {
     /// window.
     fn invalidate(&self) {
         match self.session.read(|term| self.changed_rows(term)) {
-            Some(rows) => {
-                let (ch, width) = (self.cell.1, self.area.allocated_width());
-                for row in rows {
-                    let y = PAD_Y + (row as f64 - 1.0) * ch;
-                    self.area.queue_draw_area(
-                        0,
-                        y.floor() as i32,
-                        width,
-                        (3.0 * ch).ceil() as i32 + 1,
-                    );
-                }
-            }
+            Some(rows) => rows.into_iter().for_each(|row| self.queue_row(row)),
             None => self.area.queue_draw(),
         }
+    }
+
+    /// Asks GTK to draw a row again, with the rows above and below where its
+    /// image may spill.
+    fn queue_row(&self, row: usize) {
+        let ch = self.cell.1;
+        let y = PAD_Y + (row as f64 - 1.0) * ch;
+        self.area.queue_draw_area(
+            0,
+            y.floor() as i32,
+            self.area.allocated_width(),
+            (3.0 * ch).ceil() as i32 + 1,
+        );
     }
 
     /// Shows the scroll indicator, and redraws while it fades.

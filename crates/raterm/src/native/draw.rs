@@ -397,6 +397,11 @@ impl View {
             self.render_line(&rc, style, line, start, margin, marks);
             self.render_slices(&rc, line, start, margin, images, false);
             raterm::trace!("rendered {row}");
+            // Output that came after the rows to draw were picked changed
+            // this one too: kept as drawn but clipped, it would stay stale.
+            if !cr.in_clip(1.0, y + ch / 2.0).unwrap_or(true) {
+                self.queue_row(row);
+            }
             rows[row] = Some(Row {
                 line: line.clone(),
                 start,
