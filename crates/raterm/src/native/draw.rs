@@ -223,6 +223,7 @@ impl View {
         let has_cursor = line.runs.iter().any(|r| r.style.attrs.has(Attrs::CURSOR));
         Marks {
             selected: self.selection.and_then(|s| s.cells_of(term, at, start)),
+            block: self.selection.is_some_and(|s| s.block.is_some()),
             found,
             current,
             cursor: has_cursor.then(|| self.cursor_look(term)),
@@ -430,6 +431,16 @@ impl View {
     ) {
         let (cw, ch) = self.cell;
         let cols = self.size.0 as usize;
+        // The line ends at its last char: the rest of a block is drawn here.
+        if let Some((s, e)) = marks.selected.filter(|_| marks.block) {
+            let end: usize = line.runs.iter().map(cells).sum();
+            let (s, e) = (s.max(end), e.min(start + cols));
+            if s < e {
+                set_color(cr, theme().selection, 1.0);
+                cr.rectangle(PAD_X + (s - start) as f64 * cw, y, (e - s) as f64 * cw, ch);
+                let _ = cr.fill();
+            }
+        }
         // Parts of the row: cells of the same run with the same mark.
         let mut parts = Vec::new();
         let mut col = 0;
@@ -733,6 +744,9 @@ const INDICATOR_SOLID: std::time::Duration = std::time::Duration::from_millis(60
 #[derive(Clone, PartialEq)]
 struct Marks {
     selected: Option<(usize, usize)>,
+    /// The selection is a block, which covers the blanks past the end of the
+    /// line too.
+    block: bool,
     found: Vec<(usize, usize)>,
     current: Option<(usize, usize)>,
     /// How the cursor looks, on its line only.
