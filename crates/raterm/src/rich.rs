@@ -184,10 +184,21 @@ impl Filter {
         let mut text = Vec::new();
         let mut i = 0;
         while i < input.len() {
-            // Text up to the next escape goes on at once.
+            // Text up to the next escape that may be ours goes on at once, and
+            // so do colors and moves: a CSI is only ours from `1` or `?` on.
             if self.state == State::Ground {
-                let end =
-                    (input[i..].iter().position(|&b| b == ESC)).map_or(input.len(), |n| i + n);
+                let mut end = i;
+                loop {
+                    let Some(n) = input[end..].iter().position(|&b| b == ESC) else {
+                        end = input.len();
+                        break;
+                    };
+                    end += n;
+                    match input.get(end + 1..end + 3) {
+                        Some(&[b'[', b]) if !b"1?\x1b".contains(&b) => end += 3,
+                        _ => break,
+                    }
+                }
                 text.extend_from_slice(&input[i..end]);
                 i = end;
                 if i == input.len() {
@@ -535,6 +546,14 @@ mod tests {
         assert_eq!(
             Filter::default().feed(input),
             [Piece::Bytes(input.to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_cut_csi_does_not_hide_the_next_sequence() {
+        assert_eq!(
+            Filter::default().feed(b"\x1b[31m\x1b[\x1b[16t"),
+            [Piece::Bytes(b"\x1b[31m\x1b[".to_vec()), Piece::CellSize]
         );
     }
 
