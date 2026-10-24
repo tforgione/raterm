@@ -9,9 +9,7 @@ mod input;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 
 use gtk::prelude::*;
 use gtk::{cairo, gdk, gdk_pixbuf, glib, pango};
@@ -20,12 +18,13 @@ use raterm::pty::Error;
 use raterm::session::Session;
 use raterm::term::Modes;
 use tao::event::{Event, WindowEvent};
-use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
+use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
 use webkit2gtk::WebView;
 
 use crate::native::blocks::{BlockView, block_style, css_fonts};
+use crate::native::events::{self, Redraw, UserEvent};
 use crate::native::flow::{Action, Find, Flow, PAD_Y};
 use crate::native::keys::{self, encode};
 use crate::native::select::{Selection, Unit};
@@ -33,13 +32,6 @@ use crate::native::system::{Clipboard, Which, new_window, open_url};
 use crate::native::theme;
 use draw::measure;
 use input::mods;
-
-enum UserEvent {
-    /// New output: lay the flow out again and draw it at the next frame.
-    Redraw,
-    Title(String),
-    Exit,
-}
 
 struct View {
     flow: Flow,
@@ -80,20 +72,6 @@ struct View {
     media: raterm::media::Server,
 }
 
-/// Asks the event loop for a redraw, once until it is done.
-struct Redraw {
-    pending: AtomicBool,
-    proxy: Mutex<EventLoopProxy<UserEvent>>,
-}
-
-impl Redraw {
-    fn request(&self) {
-        if !self.pending.swap(true, Ordering::AcqRel) {
-            let _ = self.proxy.lock().unwrap().send_event(UserEvent::Redraw);
-        }
-    }
-}
-
 pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
     // First: everything that draws reads it.
     theme::init_theme(&config.colors);
@@ -131,10 +109,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         "{} {}",
         config.font.family, config.font.size
     ));
-    let redraw = Arc::new(Redraw {
-        pending: AtomicBool::new(false),
-        proxy: Mutex::new(proxy.clone()),
-    });
+    let redraw = Redraw::new(proxy.clone());
     let modes = Arc::new(Mutex::new(Modes::default()));
     let cell = measure(&area, &font);
     // The program starts with the cell's size in pixels, which it may ask
@@ -386,21 +361,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         });
     }
 
-    let pump = session.clone();
-    let title_proxy = proxy.clone();
-    thread::spawn(move || {
-        pump.pump(reader, |update| {
-            if let Some(title) = update.title {
-                let _ = title_proxy.send_event(UserEvent::Title(title));
-            }
-            if let Some(m) = update.modes {
-                *modes.lock().unwrap() = m;
-            }
-            raterm::trace!("request");
-            redraw.request();
-        });
-        let _ = title_proxy.send_event(UserEvent::Exit);
-    });
+    events::pump(session.clone(), reader, modes, redraw, proxy);
 
     {
         // Programs can make the cursor blink (DECSCUSR), whatever the
@@ -425,7 +386,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             Event::UserEvent(UserEvent::Redraw) => {
                 raterm::trace!("event");
                 let mut v = view.borrow_mut();
-                v.redraw.pending.store(false, Ordering::Release);
+                v.redraw.done();
                 v.layout();
                 raterm::trace!("laid");
             }

@@ -3,6 +3,7 @@
 
 mod blocks;
 mod boxes;
+mod events;
 mod flow;
 mod keys;
 mod paint;

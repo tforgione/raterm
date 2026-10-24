@@ -484,6 +484,40 @@ impl Flow {
     }
 }
 
+impl Flow {
+    /// Draws the whole view, `width × height`, every row anew: the
+    /// background, the rows of text and the scroll indicator (blocks are
+    /// web views over it). The Linux view keeps the image of each row
+    /// instead (`gtk::draw`), which macOS can do too if drawing it all
+    /// proves slow.
+    #[cfg(target_os = "macos")]
+    pub(super) fn draw_frame(
+        &self,
+        canvas: &mut impl Canvas,
+        width: f64,
+        height: f64,
+        own: impl Fn(char) -> bool,
+    ) {
+        let opacity = self.config.window.opacity();
+        canvas.fill(0.0, 0.0, width, height, theme().bg, opacity);
+        self.session.read(|term| {
+            for (i, visual) in self.visuals(term).iter().enumerate() {
+                let y = super::flow::PAD_Y + i as f64 * self.cell.1;
+                if let super::flow::Visual::Text { line, start, at } = *visual {
+                    let marks = self.marks(term, line, start, at);
+                    paint(
+                        canvas,
+                        &self.plan_row(line, start, y, &marks, &term.images, &own),
+                    );
+                }
+            }
+            if let Some((x, y, w, h, alpha)) = self.indicator(term, width, height) {
+                canvas.fill_rounded(x, y, w, h, theme().fg, alpha);
+            }
+        });
+    }
+}
+
 /// The text and background colors of a run, with a mark and the look of the
 /// cursor.
 fn colors(run: &Run, mark: Mark, cursor: Option<Look>) -> (u32, Option<u32>) {
