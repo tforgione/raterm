@@ -5,9 +5,7 @@
 mod blocks;
 mod boxes;
 mod draw;
-mod keys;
-mod search;
-mod select;
+mod input;
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
@@ -30,11 +28,14 @@ use tao::platform::unix::WindowExtUnix;
 use tao::window::WindowBuilder;
 use webkit2gtk::{WebView, WebViewExt};
 
+use crate::native::keys::{self, encode};
+use crate::native::runs::cells;
+use crate::native::search::Search;
+use crate::native::select::{Pos, Selection, Unit};
+use crate::native::theme;
 use blocks::{Find, block_style};
-use draw::{cells, measure};
-use keys::encode;
-use search::Search;
-use select::{Pos, Selection, Unit};
+use draw::measure;
+use input::mods;
 
 enum UserEvent {
     /// New output: lay the flow out again and draw it at the next frame.
@@ -157,7 +158,7 @@ impl Redraw {
 
 pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
     // First: everything that draws reads it.
-    draw::init_theme(&config.colors);
+    theme::init_theme(&config.colors);
     let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let window = WindowBuilder::new()
@@ -435,7 +436,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 }
                 return glib::Propagation::Stop;
             }
-            let binding = view.borrow().keys.get(&keys::name(ev)).cloned();
+            let (key, mods) = (input::key(ev), mods(ev.state()));
+            let binding = view.borrow().keys.get(&keys::name(&key, mods)).cloned();
             match binding {
                 Some(Binding::Send { send }) => {
                     view.borrow_mut().scroll_to_end();
@@ -447,7 +449,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 }
                 _ => {}
             }
-            if let Some(data) = encode(ev, &modes.lock().unwrap()) {
+            if let Some(data) = encode(&key, mods, &modes.lock().unwrap()) {
                 view.borrow_mut().scroll_to_end();
                 session.input(data.as_bytes());
                 return glib::Propagation::Stop;
@@ -668,7 +670,7 @@ impl View {
         release: bool,
     ) {
         let sgr = self.modes.lock().unwrap().sgr_mouse;
-        if let Some(data) = keys::mouse(button, state, cell, release, sgr) {
+        if let Some(data) = keys::mouse(button, mods(state), cell, release, sgr) {
             self.session.input(&data);
         }
     }
@@ -1103,7 +1105,7 @@ fn search_bar(config: &Config) -> gtk::Entry {
     entry.set_placeholder_text(Some("Search"));
     // Hidden until opened, through show_all too.
     entry.set_no_show_all(true);
-    let t = draw::theme();
+    let t = theme::theme();
     let css = format!(
         "entry {{ font: {}pt {}; color: #{:06x}; background: #{:06x}; border: 1px solid #{:06x}; \
          border-radius: 0; box-shadow: none; padding: 2px 6px; min-height: 0; }} \

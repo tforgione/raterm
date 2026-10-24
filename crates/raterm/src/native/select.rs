@@ -5,7 +5,7 @@
 use raterm::history::Entry;
 use raterm::term::{Line, Terminal};
 
-use super::draw::{cells, units};
+use super::runs::{cells, units};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct Pos {

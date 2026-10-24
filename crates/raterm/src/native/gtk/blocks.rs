@@ -13,7 +13,7 @@ use webkit2gtk::{
 };
 
 use super::View;
-use super::draw::theme;
+use crate::native::theme::theme;
 
 /// A step of the search in a block.
 pub(super) enum Find<'a> {

@@ -1,67 +1,16 @@
 //! Drawing the grid with Pango, in the terminal's colors.
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use gtk::prelude::*;
 use gtk::{cairo, pango};
 use raterm::config;
 use raterm::graphics::{Image, Images, Pixels};
-use raterm::term::{Attrs, CursorShape, Line, Run, Terminal, Tint};
+use raterm::term::{Attrs, CursorShape, Line, Run, Terminal};
 
 use super::{PAD_X, PAD_Y, View, Visual, boxes};
-
-pub(super) struct Theme {
-    pub(super) fg: u32,
-    pub(super) bg: u32,
-    pub(super) cursor: u32,
-    pub(super) selection: u32,
-    pub(super) selection_text: u32,
-    pub(super) palette: [u32; 16],
-}
-
-static THEME: OnceLock<Theme> = OnceLock::new();
-
-/// Sets the colors, once, before the view draws anything.
-pub(super) fn init_theme(colors: &config::Colors) {
-    let _ = THEME.set(load(colors));
-}
-
-pub(super) fn theme() -> &'static Theme {
-    THEME.get_or_init(|| load(&config::Colors::default()))
-}
-
-/// The default theme, under the `[colors]` of config.toml.
-fn load(colors: &config::Colors) -> Theme {
-    let mut theme = Theme {
-        fg: 0xd8dee9,
-        bg: 0x151618,
-        cursor: 0xd8dee9,
-        selection: 0xd8dee9,
-        selection_text: 0x151618,
-        palette: [
-            0x2e3440, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xd8dee9,
-            0x5c6370, 0xf08088, 0xb5e890, 0xf5d58e, 0x82c4ff, 0xda9cf0, 0x7fd4de, 0xffffff,
-        ],
-    };
-    let rgb = |c: Option<config::Rgb>| c.map(|c| c.0);
-    theme.fg = rgb(colors.foreground).unwrap_or(theme.fg);
-    theme.bg = rgb(colors.background).unwrap_or(theme.bg);
-    theme.cursor = rgb(colors.cursor).unwrap_or(theme.cursor);
-    for (i, c) in colors
-        .normal
-        .iter()
-        .chain(&colors.bright)
-        .take(16)
-        .enumerate()
-    {
-        theme.palette[i] = c.0;
-    }
-    // Selected text is shown inverted, unless set.
-    theme.selection = rgb(colors.selection).unwrap_or(theme.fg);
-    theme.selection_text = rgb(colors.selection_text).unwrap_or(theme.bg);
-    theme
-}
+use crate::native::runs::{cells, regional, units, wide};
+use crate::native::theme::{rgb, theme};
 
 /// `[background] image`, if set and readable.
 pub(super) fn load_image(background: &config::Background) -> Option<gtk::gdk_pixbuf::Pixbuf> {
@@ -94,44 +43,6 @@ pub(super) fn coverage(
 ) -> Option<pango::Coverage> {
     let font = area.pango_context().load_font(font)?;
     Some(font.coverage(&pango::Language::default()))
-}
-
-/// Cells a run takes.
-pub(super) fn cells(run: &Run) -> usize {
-    match run.cluster {
-        0 => run.text.chars().count() * wide(run),
-        n => n as usize,
-    }
-}
-
-/// Cells each char of a run takes.
-fn wide(run: &Run) -> usize {
-    if run.style.attrs.has(Attrs::WIDE) {
-        2
-    } else {
-        1
-    }
-}
-
-/// What each cell of a run holds, with the cell it starts at in the run: a
-/// char, or the whole run when it is a unit (see `Run::cluster`).
-pub(super) fn units(run: &Run) -> Vec<(usize, &str)> {
-    if run.cluster > 0 {
-        return vec![(0, run.text.as_str())];
-    }
-    let wide = wide(run);
-    run.text
-        .char_indices()
-        .enumerate()
-        .map(|(i, (at, c))| (i * wide, &run.text[at..at + c.len_utf8()]))
-        .collect()
-}
-
-/// A regional indicator: two of them are a flag.
-fn regional(text: &str) -> bool {
-    text.chars()
-        .next()
-        .is_some_and(|c| ('\u{1f1e6}'..='\u{1f1ff}').contains(&c))
 }
 
 impl View {
@@ -788,14 +699,4 @@ impl Marks {
 pub(super) fn set_color(cr: &cairo::Context, rgb: u32, alpha: f64) {
     let c = |shift: u32| ((rgb >> shift) & 0xff) as f64 / 255.0;
     cr.set_source_rgba(c(16), c(8), c(0), alpha);
-}
-
-/// A color of the core, as RGB in the theme.
-fn rgb(tint: Tint) -> u32 {
-    match tint {
-        Tint::Fg => theme().fg,
-        Tint::Bg => theme().bg,
-        Tint::Palette(i) => theme().palette[i as usize % 16],
-        Tint::Rgb(v) => v,
-    }
 }
