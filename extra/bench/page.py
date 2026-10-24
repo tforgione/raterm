@@ -147,7 +147,8 @@ foot, with the script `extra/bench/bench.py`.
 - AMD Ryzen 9 5900X, 62 GiB of RAM, NVIDIA RTX 5060 Ti, Arch Linux, Hyprland
   0.56.2, one 2560x1440 screen at 60 Hz.
 - raterm at commit `{commit}` (release build, GTK 3 and Pango, WebKitGTK
-  2.54.1 for the blocks), GNOME Terminal 3.60.0 and Terminator 2.1.6 on VTE
+  2.54.1 for the blocks, with the DMA-BUF renderer of transparent blocks:
+  `[blocks] renderer = "dmabuf"`), GNOME Terminal 3.60.0 and Terminator 2.1.6 on VTE
   0.84.1, Alacritty 0.17.0, kitty 0.49.2, foot 1.28.0.
 - All six with the same font (UbuntuMono Nerd Font, 11 pt), a scrollback of
   10,000 lines (except for the scrollback measures), a black background and a

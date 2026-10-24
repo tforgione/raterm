@@ -106,7 +106,11 @@ cargo clippy -p raterm --target aarch64-apple-darwin -- -D warnings
   repeint une page transparente par-dessus elle-même, et créer une webview
   dans le processus partagé (visualiseur, bloc qui entre dans la vue) fait
   repeindre les autres. Reproductible sans souris : créer des webviews
-  liées par un timer et comparer un bloc au pixel près.
+  liées par un timer et comparer un bloc au pixel près. Toute repeinture
+  dépose en fait une couche (focus, sélection dans un bloc…) : agrandir les
+  webviews d'un pixel quelques images efface le dépôt (nouveaux tampons),
+  mais courir après chaque repeinture n'en valait pas la peine. Le moteur
+  de repli ne fait pas de blocs transparents.
 - Les glyphes des polices de secours ont d'autres largeurs et hauteurs : la
   hauteur de ligne est fixée à la cellule mesurée, une ligne dont un glyphe
   manque à la police est dessinée cellule par cellule, et chaque glyphe de

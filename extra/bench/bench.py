@@ -410,8 +410,11 @@ def setup(scratch, history=10_000):
     """Same font, scrollback and colors for all terminals."""
     config = scratch / "config"
     (config / "raterm").mkdir(parents=True, exist_ok=True)
+    # Blocks with the renderer of transparent ones, whatever `auto` would pick
+    # for this configuration (see Spec-View).
     (config / "raterm/config.toml").write_text(
         f'scrollback = {history}\n[font]\nfamily = "{FONT}"\nsize = {SIZE}\n'
+        '[blocks]\nrenderer = "dmabuf"\n'
     )
     (config / "alacritty.toml").write_text(
         f'[font]\nsize = {SIZE}\nnormal = {{ family = "{FONT}" }}\n'
