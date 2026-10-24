@@ -23,6 +23,8 @@ messages de commit sont en anglais.
   `Spec-View`), le seul module qui connaît la fenêtre, GTK et WebKit.
 - `crates/rat/` : le second binaire, sans GTK ni WebKit.
 - `crates/raterm/tests/` : tests snapshot rejouant des sessions enregistrées.
+- `.wiki/` : le wiki, un dépôt git à part, ignoré par celui du code. S'il
+  manque : `git clone git@github.com:tforgione/raterm.wiki.git .wiki`.
 
 ## Commandes
 
@@ -46,7 +48,14 @@ RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
   décision structurante (sécurité, architecture) se demande, elle ne se
   tranche pas seul.
 - Commits atomiques, messages à l'impératif, sans trailer (pas de
-  Co-Authored-By). Ne pousser que sur demande, `main` comme le wiki.
+  Co-Authored-By). Ne pousser que sur demande : le code sur `main`, le wiki
+  sur `master` (GitHub n'affiche que cette branche d'un wiki).
+- Le wiki suit le code : une modification qui change un comportement décrit
+  (spec, configuration, usage, installation) met à jour la page concernée,
+  par un commit dans `.wiki` en même temps que celui du code.
+- Les images du wiki vivent dans le wiki, en chemins relatifs
+  (`bench/x.svg`) ; le README, qui ne peut pas les atteindre en relatif,
+  passe par `https://raw.githubusercontent.com/wiki/tforgione/raterm/…`.
 - Les `.in`/`.out` de `tests/data` sont des captures réelles : ne jamais les
   réécrire à la main, seulement régénérer les `.out` et relire le diff.
 
