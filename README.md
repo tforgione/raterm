@@ -4,6 +4,11 @@
 
 # raterm
 
+> [!WARNING]
+> raterm is fully vibe coded: its code was written by an AI, not by hand, and
+> was not reviewed line by line. It is a personal project shared as is, with
+> no guarantee of any kind. Use it at your own risk.
+
 A terminal emulator for Linux, written in Rust, that draws its text with GTK
 and shows rich blocks with WebKit. Regular output (text, ANSI colors, cursor, full-screen programs like vim or
 htop) works as in any terminal, but programs can also insert rich blocks at the
