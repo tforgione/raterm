@@ -26,6 +26,9 @@ pub(super) struct Selection {
     pub(super) anchor: Pos,
     pub(super) head: Pos,
     pub(super) unit: Unit,
+    /// A block (Ctrl+drag), with the columns of the view: the same columns
+    /// of each row of the view, the cells of the anchor and the head included.
+    pub(super) block: Option<usize>,
 }
 
 /// A line of the flow: an entry of the history or a row of the screen.
@@ -106,8 +109,28 @@ impl Selection {
         (a, b)
     }
 
-    /// The selected cells of line `at`, as a range.
-    pub(super) fn cells_of(&self, term: &Terminal, at: u64) -> Option<(usize, usize)> {
+    /// The rows of the view a block spans, as (entry, row of the entry), and
+    /// its columns.
+    fn rect(&self, cols: usize) -> ((u64, usize), (u64, usize), usize, usize) {
+        let row = |p: Pos| (p.at, p.cell / cols);
+        let (a, h) = (row(self.anchor), row(self.head));
+        let (ca, ch) = (self.anchor.cell % cols, self.head.cell % cols);
+        (a.min(h), a.max(h), ca.min(ch), ca.max(ch) + 1)
+    }
+
+    /// The selected cells of the row of the view that starts at cell `start`
+    /// of line `at`, as a range.
+    pub(super) fn cells_of(
+        &self,
+        term: &Terminal,
+        at: u64,
+        start: usize,
+    ) -> Option<(usize, usize)> {
+        if let Some(cols) = self.block {
+            let (top, bottom, c1, c2) = self.rect(cols);
+            let row = (at, start / cols);
+            return (top <= row && row <= bottom).then_some((start + c1, start + c2));
+        }
         let (a, b) = self.bounds(term);
         if at < a.at || at > b.at {
             return None;
@@ -120,6 +143,9 @@ impl Selection {
     /// The selected text: lines end with a newline, except a soft-wrapped row
     /// of the screen, which goes on in the next one; trailing blanks go.
     pub(super) fn text(&self, term: &Terminal) -> String {
+        if let Some(cols) = self.block {
+            return self.block_text(term, cols);
+        }
         let (a, b) = self.bounds(term);
         let mut out = String::new();
         for at in a.at..=b.at {
@@ -130,7 +156,7 @@ impl Selection {
                     false
                 }
                 Item::Line(line) => {
-                    let (s, e) = self.cells_of(term, at).unwrap_or((0, 0));
+                    let (s, e) = self.cells_of(term, at, 0).unwrap_or((0, 0));
                     let text: String = chars(line)
                         .into_iter()
                         .filter(|&(x, _)| x >= s && x < e)
@@ -147,6 +173,34 @@ impl Selection {
         out
     }
 
+    /// A line per row of the view in the block, without its trailing blanks.
+    fn block_text(&self, term: &Terminal, cols: usize) -> String {
+        let (top, bottom, ..) = self.rect(cols);
+        let mut rows = Vec::new();
+        for at in top.0..=bottom.0 {
+            match item(term, at) {
+                Some(Item::Line(line)) => {
+                    let len: usize = line.runs.iter().map(cells).sum();
+                    for start in (0..len.max(1).div_ceil(cols)).map(|r| r * cols) {
+                        if let Some((s, e)) = self.cells_of(term, at, start) {
+                            let text: String = chars(line)
+                                .into_iter()
+                                .filter(|&(x, _)| x >= s && x < e)
+                                .map(|(_, c)| c)
+                                .collect();
+                            rows.push(text.trim_end().to_owned());
+                        }
+                    }
+                }
+                Some(Item::Block(text)) => rows.push(text.unwrap_or("").to_owned()),
+                None => {}
+            }
+        }
+        rows.join("\n")
+    }
+
+    /// A click without a drag: a block starts empty, as a single cell would
+    /// leave no room to tell a Ctrl+click on a link apart.
     pub(super) fn is_empty(&self) -> bool {
         self.unit == Unit::Cell && self.anchor == self.head
     }
@@ -162,6 +216,7 @@ mod tests {
             anchor: pos(anchor),
             head: pos(head),
             unit,
+            block: None,
         }
         .text(term)
     }
@@ -198,6 +253,45 @@ mod tests {
         term.advance(b"abcdef\r\ngh");
         term.refresh();
         assert_eq!(select(&term, (0, 0), (2, 2), Unit::Cell), "abcdef\ngh");
+    }
+
+    fn select_block(
+        term: &Terminal,
+        anchor: (u64, usize),
+        head: (u64, usize),
+        cols: usize,
+    ) -> String {
+        let pos = |(at, cell)| Pos { at, cell };
+        Selection {
+            anchor: pos(anchor),
+            head: pos(head),
+            unit: Unit::Cell,
+            block: Some(cols),
+        }
+        .text(term)
+    }
+
+    #[test]
+    fn a_block_takes_the_same_columns_of_each_row() {
+        let mut term = Terminal::new(12, 3);
+        term.advance(b"left | right\r\nab   | cd\r\nxyz  | w");
+        term.refresh();
+        // Columns 7 to 11 of the three rows, the panel on the right.
+        assert_eq!(select_block(&term, (0, 7), (2, 11), 12), "right\ncd\nw");
+        // Dragged up and left, the same block.
+        assert_eq!(select_block(&term, (2, 11), (0, 7), 12), "right\ncd\nw");
+        assert_eq!(select_block(&term, (0, 0), (2, 3), 12), "left\nab\nxyz");
+    }
+
+    #[test]
+    fn a_block_cuts_a_wrapped_entry_into_its_rows_of_the_view() {
+        let mut term = Terminal::new(4, 2);
+        // "abcdefgh" soft-wraps: one entry of the history, two rows of the view.
+        term.advance(b"abcdefgh\r\nij\r\n\r\n");
+        term.refresh();
+        // Columns 1 and 2 of row 0 (cells 1..3) to row 1 of the entry (cells 5..7).
+        assert_eq!(select_block(&term, (0, 1), (0, 6), 4), "bc\nfg");
+        assert_eq!(select_block(&term, (0, 5), (1, 6), 4), "fg\nj");
     }
 
     #[test]

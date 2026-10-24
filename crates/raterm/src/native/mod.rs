@@ -136,6 +136,9 @@ struct View {
     /// gets the mouse.
     pressed: Option<u8>,
     last_cell: Option<(usize, usize)>,
+    /// The link under a Ctrl+click, opened on release unless a block was
+    /// dragged.
+    link: Option<String>,
 }
 
 /// Asks the event loop for a redraw, once until it is done.
@@ -242,6 +245,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         media,
         modes: modes.clone(),
         pressed: None,
+        link: None,
         last_cell: None,
     }));
     view.borrow_mut().me = Rc::downgrade(&view);
@@ -288,16 +292,17 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             let (x, y) = ev.position();
             let mut view = view.borrow_mut();
             let ctrl = ev.state().contains(gdk::ModifierType::CONTROL_MASK);
-            if ev.button() == 1
-                && ctrl
-                && let Some(url) = view.link_at(x, y)
-            {
-                open_url(&url);
-                return glib::Propagation::Stop;
-            }
+            let link = (ev.button() == 1 && ctrl)
+                .then(|| view.link_at(x, y))
+                .flatten();
             if let Some(cell) = view.reported_cell(ev.state(), x, y)
                 && (1..=3).contains(&ev.button())
             {
+                // No selection to tell a Ctrl+click on a link apart from.
+                if let Some(url) = link {
+                    open_url(&url);
+                    return glib::Propagation::Stop;
+                }
                 // The program gets the click: no selection.
                 if ev.event_type() == gdk::EventType::ButtonPress {
                     let button = ev.button() as u8 - 1;
@@ -315,11 +320,14 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                         _ => Unit::Cell,
                     };
                     view.clear_selections(None);
-                    if let Some(pos) = view.pos_at(x, y) {
+                    let block = (ctrl && unit == Unit::Cell).then_some(view.size.0 as usize);
+                    view.link = link.filter(|_| unit == Unit::Cell);
+                    if let Some(pos) = view.pos_at(x, y, block.is_some()) {
                         view.selection = Some(Selection {
                             anchor: pos,
                             head: pos,
                             unit,
+                            block,
                         });
                         view.area.queue_draw();
                     }
@@ -341,7 +349,8 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             if !ev.state().contains(gdk::ModifierType::BUTTON1_MASK) {
                 return glib::Propagation::Proceed;
             }
-            if let Some(pos) = view.pos_at(x, y)
+            let block = view.selection.is_some_and(|s| s.block.is_some());
+            if let Some(pos) = view.pos_at(x, y, block)
                 && let Some(selection) = &mut view.selection
                 && selection.head != pos
             {
@@ -363,9 +372,13 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 return glib::Propagation::Stop;
             }
             if ev.button() == 1 {
+                let link = view.link.take();
                 if view.selection.is_some_and(|s| s.is_empty()) {
                     view.selection = None;
                     view.area.queue_draw();
+                    if let Some(url) = link {
+                        open_url(&url);
+                    }
                 }
                 view.copy(gdk::SELECTION_PRIMARY);
             }
@@ -577,8 +590,9 @@ impl View {
     }
 
     /// The position in the flow at a point of the view: the nearest boundary
-    /// between cells, or the start of a block.
-    fn pos_at(&self, x: f64, y: f64) -> Option<Pos> {
+    /// between cells (the cell under the point for a block selection, which
+    /// includes it), or the start of a rich block.
+    fn pos_at(&self, x: f64, y: f64, block: bool) -> Option<Pos> {
         let (cw, ch) = self.cell;
         self.session.read(|term| {
             let visuals = self.visuals(term);
@@ -586,7 +600,11 @@ impl View {
                 (((y - PAD_Y) / ch).floor().max(0.0) as usize).min(visuals.len().checked_sub(1)?);
             Some(match visuals[row] {
                 Visual::Text { start, at, .. } => {
-                    let col = ((x - PAD_X) / cw).round().clamp(0.0, self.size.0 as f64) as usize;
+                    let cols = self.size.0 as f64;
+                    let col = match block {
+                        true => ((x - PAD_X) / cw).floor().clamp(0.0, cols - 1.0),
+                        false => ((x - PAD_X) / cw).round().clamp(0.0, cols),
+                    } as usize;
                     Pos {
                         at,
                         cell: start + col,

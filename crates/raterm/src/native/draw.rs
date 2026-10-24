@@ -164,7 +164,7 @@ impl View {
             for (i, visual) in visuals.iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
-                    let marks = self.marks(term, line, at);
+                    let marks = self.marks(term, line, start, at);
                     self.draw_line(cr, &style, i, line, start, y, &marks, &term.images);
                 }
             }
@@ -215,14 +215,14 @@ impl View {
         Some(backdrop)
     }
 
-    fn marks(&self, term: &Terminal, line: &Line, at: u64) -> Marks {
+    fn marks(&self, term: &Terminal, line: &Line, start: usize, at: u64) -> Marks {
         let (found, current) = match &self.search {
             Some(search) => search.cells(line, at),
             None => (Vec::new(), None),
         };
         let has_cursor = line.runs.iter().any(|r| r.style.attrs.has(Attrs::CURSOR));
         Marks {
-            selected: self.selection.and_then(|s| s.cells_of(term, at)),
+            selected: self.selection.and_then(|s| s.cells_of(term, at, start)),
             found,
             current,
             cursor: has_cursor.then(|| self.cursor_look(term)),
@@ -268,7 +268,7 @@ impl View {
             let Visual::Text { line, start, at } = *visual else {
                 return None;
             };
-            let marks = self.marks(term, line, at);
+            let marks = self.marks(term, line, start, at);
             if !rows
                 .get(i)
                 .and_then(Option::as_ref)
