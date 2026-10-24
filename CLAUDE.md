@@ -19,8 +19,14 @@ messages de commit sont en anglais.
   OSC 7117, rendu Markdown avec comrak + syntect), `media` (registre et
   serveur HTTP local des vidéos et de l'audio), `session`, `config`.
 - `crates/raterm/src/native/` et `main.rs` : le binaire. `native` est la vue
-  (grille dessinée par GTK/Pango, blocs en webviews enfantes, voir
-  `Spec-View`), le seul module qui connaît la fenêtre, GTK et WebKit.
+  (grille dessinée, blocs en webviews enfantes, voir `Spec-View` et
+  `Spec-macOS`), le seul module qui connaît la fenêtre. Ce qu'elle décide est
+  partagé (`flow` : disposition, défilement, souris, recherche, raccourcis ;
+  `paint` : ce que chaque ligne dessine, peint par le trait `Canvas` ;
+  `blocks` : documents, styles et scripts des blocs, trait `BlockView` ;
+  `system`, `keys`, `events`…). Ce qui dessine est un backend : `native/gtk`
+  sur Linux (GTK, Pango, WebKitGTK), `native/macos` sur macOS (AppKit, Core
+  Text, `WKWebView`), le seul endroit où le toolkit apparaît.
 - `crates/rat/` : le second binaire, sans GTK ni WebKit.
 - `crates/raterm/tests/` : tests snapshot rejouant des sessions enregistrées.
 - `.wiki/` : le wiki, un dépôt git à part, ignoré par celui du code. S'il
@@ -34,6 +40,8 @@ cargo test --workspace                      # sans fenêtre
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --check
 RATERM_UPDATE_SNAPSHOTS=1 cargo test --test snapshots   # réécrit les .out
+# la vue macOS, vérifiée depuis Linux (rustup target add aarch64-apple-darwin)
+cargo clippy -p raterm --target aarch64-apple-darwin -- -D warnings
 ```
 
 ## Conventions
@@ -132,3 +140,16 @@ Thomas utilise `raterm` au quotidien : ne jamais lancer `pkill raterm`,
   Thomas est dans `~/.config/raterm/`.
 - Dans un pty de test, `timeout` doit avoir `--foreground` pour lire le
   terminal ; le shell de Thomas est zsh (pas de découpage des variables).
+
+## macOS
+
+La vue macOS est un squelette (`Spec-macOS`) : la boucle d'événements de tao,
+le clavier, la souris et la sélection sont écrits, mais rien n'a tourné sur
+un Mac. Reste chaque `todo!("macOS: …")`, qui dit quoi faire et avec quelle
+API (`grep -rn 'todo!("macOS' crates`) : police et `Canvas` (Core Text,
+Core Graphics), webviews des blocs (`WKWebView`), champ de recherche,
+presse-papier, dossier courant (`proc_pidinfo`). Les crates `objc2-*`
+s'ajoutent aux dépendances macOS de `Cargo.toml` en les écrivant, aux
+versions que tao tire déjà. Ne pas toucher à `native/gtk` pour le Mac : ce
+qui manque au partagé se partage d'abord (`flow`, `paint`, `blocks`…), sans
+changer le comportement Linux.
