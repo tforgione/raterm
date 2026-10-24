@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/wiki/tforgione/raterm/raterm.png" alt="raterm" width="160">
+</p>
+
 # raterm
 
 > [!WARNING]
@@ -10,7 +14,7 @@ and shows rich blocks with WebKit. Regular output (text, ANSI colors, cursor, fu
 htop) works as in any terminal, but programs can also insert rich blocks at the
 cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 
-<p>
+<p align="center">
   <a href="https://raw.githubusercontent.com/wiki/tforgione/raterm/screenshot-readme.webp"><img src="https://raw.githubusercontent.com/wiki/tforgione/raterm/screenshot-readme.webp" height="180" alt="rat README.md"></a>
   <a href="https://raw.githubusercontent.com/wiki/tforgione/raterm/screenshot-image.webp"><img src="https://raw.githubusercontent.com/wiki/tforgione/raterm/screenshot-image.webp" height="180" alt="rat extra/raterm.png"></a>
   <a href="https://raw.githubusercontent.com/wiki/tforgione/raterm/screenshot-video.webp"><img src="https://raw.githubusercontent.com/wiki/tforgione/raterm/screenshot-video.webp" height="180" alt="rat mandelbrot.mp4"></a>
