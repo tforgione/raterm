@@ -116,7 +116,7 @@ impl View {
                 r#"<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'">
 <style>
-html, body {{ margin: 0; height: 100%; overflow: hidden; background: rgba(0, 0, 0, 0.85); }}
+html, body {{ margin: 0; height: 100%; overflow: hidden; background: rgba(0, 0, 0, 0.5); }}
 body {{ display: flex; align-items: center; justify-content: center; }}
 img {{ {size} }}
 span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; color: #fff; opacity: 0.8; }}
