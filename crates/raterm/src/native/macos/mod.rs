@@ -506,7 +506,7 @@ impl View {
     /// without scripts nor network, links open in the desktop's handler.
     fn block_view(&mut self, entry: u64, block: &Rendered) -> WebView {
         let html = self.flow.document(block, &self.media, &self.block_style);
-        let transparent = self.flow.config.blocks.background.is_none();
+        let transparent = !self.flow.config.opaque_blocks();
         let image = matches!(block.kind, Kind::Img | Kind::Svg).then(|| block.clone());
         let me = self.me.clone();
         let redraw = self.redraw.clone();

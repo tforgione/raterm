@@ -113,10 +113,10 @@ impl View {
             // height) still can, from the API.
             settings.set_enable_javascript_markup(false);
         }
-        // Transparent, the background of the grid showing, unless blocks have
-        // a color of their own (see Spec-View).
+        // Transparent, the background of the grid showing, unless blocks are
+        // opaque (see Spec-View).
         let bg = |shift: u32| ((background(&self.flow.config) >> shift) & 0xff) as f64 / 255.0;
-        let alpha = if self.flow.config.blocks.background.is_some() {
+        let alpha = if self.flow.config.opaque_blocks() {
             1.0
         } else {
             0.0

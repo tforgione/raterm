@@ -118,8 +118,12 @@ cargo clippy -p raterm --target aarch64-apple-darwin -- -D warnings
 - Les noms de police doivent être entre guillemets en CSS (`Source Serif 4`).
 - Sous Wayland avec Nvidia, les tampons GPU du rendu DMA-BUF font planter
   GTK (`Error 71`) : `main.rs` pose `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`
-  (DMA-BUF en mémoire partagée), pas `WEBKIT_DISABLE_DMABUF_RENDERER`, qui
-  fait baver les blocs transparents (voir plus haut).
+  (DMA-BUF en mémoire partagée) là où un bloc transparent laisse voir
+  quelque chose (image de fond, fenêtre translucide), sinon
+  `WEBKIT_DISABLE_DMABUF_RENDERER`, qui fait baver les blocs transparents
+  (voir plus haut) mais coûte environ 200 Mio de moins avec des blocs : les
+  blocs y sont alors opaques, de la couleur du fond. `[blocks] renderer`
+  force l'un ou l'autre (`Config::fallback_renderer`).
 
 ## Tester en vrai
 

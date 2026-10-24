@@ -20,7 +20,8 @@ use super::theme::theme;
 ///   any other navigation but the document itself;
 /// - run `MEASURE` once the document is loaded, and give each new title of
 ///   the document to `told`;
-/// - be transparent, unless `[blocks] background` is set (`background`);
+/// - be transparent, unless blocks are opaque (`Config::opaque_blocks`,
+///   in the color of `background`);
 /// - send the wheel to the flow, and keep a click on an image or SVG for
 ///   the image viewer (`viewer_document`).
 pub(super) trait BlockView {
@@ -296,7 +297,7 @@ body.md > table {{ max-width: none; margin: 8px auto; }}
 "#,
         fg = t.fg,
         bg = background(config),
-        page = if config.blocks.background.is_some() {
+        page = if config.opaque_blocks() {
             "var(--bg)"
         } else {
             "transparent"

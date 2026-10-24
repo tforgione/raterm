@@ -27,7 +27,7 @@ impl WebView {
     /// Makes a web view in `parent`, above the grid, which then loads its
     /// document (`BlockView::load`). Every web view of raterm shares one
     /// `WKProcessPool` (the default).
-    /// `transparent` unless `[blocks] background` is set. It must:
+    /// `transparent` unless blocks are opaque (`Config::opaque_blocks`). It must:
     ///
     /// - disable the document's scripts:
     ///   `WKWebpagePreferences.allowsContentJavaScript = false`, which still

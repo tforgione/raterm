@@ -173,6 +173,20 @@ pub struct Blocks {
     /// Columns on each side of the text of Markdown blocks, which are then
     /// only as wide as it; the whole width when unset.
     pub padding: Option<u16>,
+    /// WebKit's renderer for the web views of blocks (see Spec-View).
+    pub renderer: Renderer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Renderer {
+    /// The fallback where it looks the same, DMA-BUF otherwise.
+    #[default]
+    Auto,
+    /// Cheaper, but transparent blocks build up.
+    Fallback,
+    /// DMA-BUF, its buffers in shared memory.
+    Dmabuf,
 }
 
 impl Default for Blocks {
@@ -182,6 +196,7 @@ impl Default for Blocks {
             font_size: 12.0,
             background: None,
             padding: None,
+            renderer: Renderer::Auto,
         }
     }
 }
@@ -194,6 +209,28 @@ pub enum Binding {
     Action(String),
     /// Text sent to the program as if typed.
     Send { send: String },
+}
+
+impl Config {
+    /// Whether blocks render with WebKit's fallback renderer: chosen, or in
+    /// `auto` when nothing would show through blocks drawn opaque.
+    pub fn fallback_renderer(&self) -> bool {
+        match self.blocks.renderer {
+            Renderer::Fallback => true,
+            Renderer::Dmabuf => false,
+            Renderer::Auto => {
+                self.blocks.background.is_some()
+                    || (self.background.image.is_none() && self.window.opacity() >= 1.0)
+            }
+        }
+    }
+
+    /// Whether blocks are opaque: with `[blocks] background`, or in `auto`
+    /// with the fallback renderer, in the terminal's background color.
+    pub fn opaque_blocks(&self) -> bool {
+        self.blocks.background.is_some()
+            || (self.blocks.renderer == Renderer::Auto && self.fallback_renderer())
+    }
 }
 
 impl Default for Config {
@@ -337,6 +374,24 @@ mod tests {
         assert_eq!((set.fit, set.tint()), (Fit::Cover, 0.7));
         let set = background("[background]\nimage = \"a.png\"");
         assert_eq!(set.image_path(), Some(dir().join("a.png")));
+    }
+
+    #[test]
+    fn the_renderer_is_the_fallback_where_it_looks_the_same() {
+        let config = |text| Config::parse(text).unwrap();
+        let plain = config("");
+        assert!(plain.fallback_renderer() && plain.opaque_blocks());
+        let image = config("[background]\nimage = \"wood.jpg\"");
+        assert!(!image.fallback_renderer() && !image.opaque_blocks());
+        let translucent = config("[window]\nopacity = 0.9");
+        assert!(!translucent.fallback_renderer());
+        let colored = config("[window]\nopacity = 0.9\n[blocks]\nbackground = \"#202020\"");
+        assert!(colored.fallback_renderer() && colored.opaque_blocks());
+        let chosen =
+            config("[background]\nimage = \"wood.jpg\"\n[blocks]\nrenderer = \"fallback\"");
+        assert!(chosen.fallback_renderer() && !chosen.opaque_blocks());
+        let dmabuf = config("[blocks]\nrenderer = \"dmabuf\"");
+        assert!(!dmabuf.fallback_renderer() && !dmabuf.opaque_blocks());
     }
 
     #[test]
