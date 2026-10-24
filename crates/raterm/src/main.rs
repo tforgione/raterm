@@ -29,6 +29,7 @@ fn main() -> Result<(), raterm::pty::Error> {
     // "Error 71 (Protocol error)" on Wayland with Nvidia drivers, and since
     // 2.54 its fallback renderer paints transparent blocks over themselves:
     // the DMA-BUF renderer with shared-memory buffers does neither.
+    #[cfg(target_os = "linux")]
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none()
         && std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none()
     {

@@ -49,9 +49,17 @@ impl Pty {
     }
 
     /// Current directory of the program, read from procfs.
+    #[cfg(target_os = "linux")]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
         let pid = self.child.process_id()?;
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+
+    /// Current directory of the program.
+    #[cfg(target_os = "macos")]
+    pub fn cwd(&self) -> Option<std::path::PathBuf> {
+        let _pid = self.child.process_id()?;
+        todo!("macOS: proc_pidinfo(pid, PROC_PIDVNODEPATHINFO) with libc, its pvi_cdir")
     }
 
     /// Resizes to `cols × rows` cells, `width × height` pixels in all.
