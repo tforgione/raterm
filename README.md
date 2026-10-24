@@ -33,7 +33,8 @@ sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev gstreamer1.0-p
 sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
 ```
 
-Then build and install both binaries with a recent stable Rust (edition 2024):
+Then build and install both binaries with Rust 1.89 or later, from
+[rustup](https://rustup.rs) (the packaged Rust of Ubuntu 24.04 is too old):
 
 ```sh
 git clone https://github.com/tforgione/raterm
