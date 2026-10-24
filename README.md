@@ -23,10 +23,13 @@ cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 ## Installing
 
 raterm runs on Linux only, on X11 and Wayland. It needs WebKitGTK 4.1 and, for
-videos and audio, GStreamer's good plugins (plus libav for H.264 and AAC). On
-Arch Linux:
+videos and audio, GStreamer's good plugins (plus libav for H.264 and AAC):
 
 ```sh
+# On Ubuntu
+sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev gstreamer1.0-plugins-good gstreamer1.0-libav
+
+# On Arch Linux
 sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
 ```
 
