@@ -834,12 +834,29 @@ impl Terminal {
         let mut style = Style::default();
         let mut images: Vec<Shown> = Vec::new();
         let mut left: Option<Placeholder> = None;
+        // The previous cell when it was a plain one: a plain cell with its
+        // attributes only extends its run, which the bulk of a flood is.
+        let mut plain: Option<&Cell> = None;
         for (x, cell) in cells[..end].iter().enumerate() {
             if cell
                 .flags
                 .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
             {
                 continue;
+            }
+            let was = plain.take();
+            if urls.is_empty()
+                && cell.extra.is_none()
+                && cell.c != kitty::PLACEHOLDER
+                && Some(x) != cursor
+            {
+                plain = Some(cell);
+                if was.is_some_and(|p| (p.fg, p.bg, p.flags) == (cell.fg, cell.bg, cell.flags))
+                    && let Some(run) = runs.last_mut().filter(|run| run.cluster == 0)
+                {
+                    run.text.push(cell.c);
+                    continue;
+                }
             }
             let url = urls
                 .iter()
