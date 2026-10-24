@@ -78,6 +78,9 @@ raterm --title NAME -e COMMAND ARGS...  # same options as alacritty
 
 ## rat
 
+`rat` shows a file as a rich block in raterm, and falls back to plain text
+anywhere else.
+
 ```sh
 rat FILE              # kind guessed from the extension
 rat --md -            # from stdin
