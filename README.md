@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://git.tforgione.fr/tforgione/raterm/wiki/raw/raterm.png" alt="raterm" width="160">
+  <img src="https://raw.githubusercontent.com/wiki/tforgione/raterm/raterm.png" alt="raterm" width="160">
 </p>
 
 # raterm
@@ -40,7 +40,7 @@ sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
 Then build and install both binaries with a recent stable Rust (edition 2024):
 
 ```sh
-git clone https://git.tforgione.fr/tforgione/raterm
+git clone https://github.com/tforgione/raterm
 cd raterm
 cargo install --path crates/raterm
 cargo install --path crates/rat
@@ -230,7 +230,7 @@ window; `native`, the view, is the only module that knows about GTK and
 WebKit. Snapshot tests replay
 recorded sessions from `crates/raterm/tests/data` (recorded with `record.sh`
 there); `RATERM_UPDATE_SNAPSHOTS=1 cargo test` rewrites them. The
-[specification](https://git.tforgione.fr/tforgione/raterm/wiki/Spec), in the
+[specification](https://github.com/tforgione/raterm/wiki/Spec), in the
 wiki, describes the design.
 
 ## License

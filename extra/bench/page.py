@@ -24,7 +24,7 @@ commit = sys.argv[3] if len(sys.argv) > 3 else subprocess.run(
 baseline = Path(__file__).parent / "baseline-2026-10-20.jsonl"
 summary = (new_dir / "summary.md").read_text()
 sections = dict(re.findall(r"### (\w[\w ]*)\n\n(.*?)(?=\n### |\Z)", summary, re.S))
-img = lambda name: f"![{name}](https://git.tforgione.fr/tforgione/raterm/wiki/raw/bench/{name}.svg)"
+img = lambda name: f"![{name}](bench/{name}.svg)"
 
 
 def medians(path, bench, key):
