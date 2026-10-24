@@ -1,8 +1,10 @@
 //! The view (see Spec-View and Spec-macOS in the wiki): a backend per
 //! platform, GTK on Linux and AppKit on macOS.
 
+mod boxes;
 mod flow;
 mod keys;
+mod paint;
 mod runs;
 mod search;
 mod select;

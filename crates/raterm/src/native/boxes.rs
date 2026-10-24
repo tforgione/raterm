@@ -1,8 +1,7 @@
 //! Box drawing and block elements (U+2500 to U+259F), drawn to fill their
 //! cell: the glyphs of fonts rarely span the whole height of a cell, and
-//! frames showed gaps between rows (see Spec-View).
-
-use gtk::cairo;
+//! frames showed gaps between rows (see Spec-View). Their shapes are
+//! computed here and painted by the backend (`Canvas::shape`).
 
 /// The arms of each box drawing char, 2 bits each from the lowest: up,
 /// right, down, left; 0 none, 1 light, 2 heavy, 3 double. Generated from
@@ -27,6 +26,25 @@ const ARMS: [u8; 128] = [
     0x80, 0x02, 0x08, 0x20, 0x48, 0x21, 0x84, 0x12, // ╸╹╺╻╼╽╾╿
 ];
 
+/// What a char drawn by raterm is made of, in the color of the char.
+#[derive(Debug, PartialEq)]
+pub(super) enum Shape {
+    /// Rectangles `(x, y, width, height)`, on whole pixels, filled as one.
+    Fill(Vec<(f64, f64, f64, f64)>),
+    /// A rectangle filled at `alpha` (the shades).
+    Shade((f64, f64, f64, f64), f64),
+    /// A path stroked `width` wide (arcs and diagonals).
+    Stroke(f64, Vec<Segment>),
+}
+
+#[derive(Debug, PartialEq)]
+pub(super) enum Segment {
+    Move(f64, f64),
+    Line(f64, f64),
+    /// A cubic Bézier curve: two control points, then the end.
+    Curve(f64, f64, f64, f64, f64, f64),
+}
+
 /// Whether raterm draws `c` itself, instead of the font.
 pub(super) fn drawn(c: &str) -> bool {
     let mut chars = c.chars();
@@ -39,53 +57,56 @@ pub(super) fn drawn(c: &str) -> bool {
     }
 }
 
-/// Draws `c` (one of `drawn`) in the cell at `x`, `y`, in the current
-/// source color of `cr`.
-pub(super) fn draw(cr: &cairo::Context, c: &str, x: f64, y: f64, cw: f64, ch: f64) {
-    let Some(c) = c.chars().next() else { return };
+/// The shape of `c` (one of `drawn`) in the cell at `x`, `y`.
+pub(super) fn shape(c: &str, x: f64, y: f64, cw: f64, ch: f64) -> Option<Shape> {
+    let c = c.chars().next()?;
     // On whole pixels, so that cells next to each other join.
     let (x0, x1, y0, y1) = (x.round(), (x + cw).round(), y.round(), (y + ch).round());
     let (w, h) = (x1 - x0, y1 - y0);
     let light = (w / 8.0).round().max(1.0);
+    let rects = std::cell::RefCell::new(Vec::new());
     let fill = |l: f64, t: f64, r: f64, b: f64| {
-        cr.rectangle(l.round(), t.round(), (r - l).round(), (b - t).round());
+        (rects.borrow_mut()).push((l.round(), t.round(), (r - l).round(), (b - t).round()));
     };
     match c as u32 {
-        0x2580..=0x259f => blocks(c as u32, x0, y0, w, h, fill, cr),
+        0x2591..=0x2593 => {
+            // Shades: the color at a quarter, half or three quarters.
+            let alpha = (c as u32 - 0x2590) as f64 / 4.0;
+            return Some(Shape::Shade((x0, y0, w, h), alpha));
+        }
+        0x2580..=0x259f => blocks(c as u32, x0, y0, w, h, fill),
         0x256d..=0x2573 => {
             let (cx, cy) = (
                 x0 + (w / 2.0).floor() + light / 2.0,
                 y0 + (h / 2.0).floor() + light / 2.0,
             );
-            cr.set_line_width(light);
-            match c {
-                '╭' => curve(cr, (x1, cy), (cx, cy), (cx, y1)),
-                '╮' => curve(cr, (x0, cy), (cx, cy), (cx, y1)),
-                '╯' => curve(cr, (x0, cy), (cx, cy), (cx, y0)),
-                '╰' => curve(cr, (x1, cy), (cx, cy), (cx, y0)),
+            let curve = |from: (f64, f64), corner: (f64, f64), to: (f64, f64)| {
+                vec![
+                    Segment::Move(from.0, from.1),
+                    Segment::Curve(corner.0, corner.1, corner.0, corner.1, to.0, to.1),
+                ]
+            };
+            let path = match c {
+                '╭' => curve((x1, cy), (cx, cy), (cx, y1)),
+                '╮' => curve((x0, cy), (cx, cy), (cx, y1)),
+                '╯' => curve((x0, cy), (cx, cy), (cx, y0)),
+                '╰' => curve((x1, cy), (cx, cy), (cx, y0)),
                 _ => {
+                    let mut path = Vec::new();
                     if c != '╲' {
-                        cr.move_to(x1, y0);
-                        cr.line_to(x0, y1);
+                        path.extend([Segment::Move(x1, y0), Segment::Line(x0, y1)]);
                     }
                     if c != '╱' {
-                        cr.move_to(x0, y0);
-                        cr.line_to(x1, y1);
+                        path.extend([Segment::Move(x0, y0), Segment::Line(x1, y1)]);
                     }
+                    path
                 }
-            }
-            let _ = cr.stroke();
-            return;
+            };
+            return Some(Shape::Stroke(light, path));
         }
         _ => lines(ARMS[c as usize - 0x2500], x0, y0, x1, y1, light, fill),
     }
-    let _ = cr.fill();
-}
-
-/// A rounded corner from `from` to `to` around `corner`.
-fn curve(cr: &cairo::Context, from: (f64, f64), corner: (f64, f64), to: (f64, f64)) {
-    cr.move_to(from.0, from.1);
-    cr.curve_to(corner.0, corner.1, corner.0, corner.1, to.0, to.1);
+    Some(Shape::Fill(rects.into_inner()))
 }
 
 /// The arms of a box drawing char, from the center to the edges of the
@@ -164,16 +185,8 @@ fn lines(
     }
 }
 
-/// Block elements: halves, eighths, quadrants and shades.
-fn blocks(
-    c: u32,
-    x0: f64,
-    y0: f64,
-    w: f64,
-    h: f64,
-    fill: impl Fn(f64, f64, f64, f64),
-    cr: &cairo::Context,
-) {
+/// Block elements: halves, eighths and quadrants (shades are apart).
+fn blocks(c: u32, x0: f64, y0: f64, w: f64, h: f64, fill: impl Fn(f64, f64, f64, f64)) {
     let (x1, y1) = (x0 + w, y0 + h);
     let (mx, my) = (x0 + (w / 2.0).round(), y0 + (h / 2.0).round());
     let eighth = |n: u32, of: f64| (of * n as f64 / 8.0).round();
@@ -182,15 +195,6 @@ fn blocks(
         0x2581..=0x2588 => fill(x0, y1 - eighth(c - 0x2580, h), x1, y1),
         0x2589..=0x258f => fill(x0, y0, x0 + eighth(0x2590 - c, w), y1),
         0x2590 => fill(mx, y0, x1, y1),
-        0x2591..=0x2593 => {
-            // Shades: the color at a quarter, half or three quarters.
-            let alpha = (c - 0x2590) as f64 / 4.0;
-            let _ = cr.save();
-            cr.rectangle(x0, y0, w, h);
-            cr.clip();
-            let _ = cr.paint_with_alpha(alpha);
-            let _ = cr.restore();
-        }
         0x2594 => fill(x0, y0, x1, y0 + eighth(1, h)),
         0x2595 => fill(x1 - eighth(1, w), y0, x1, y1),
         _ => {
@@ -226,5 +230,26 @@ mod tests {
         assert!(drawn("│") && drawn("╭") && drawn("█") && drawn("▒"));
         // Dashes keep the font's glyphs.
         assert!(!drawn("┄") && !drawn("╎") && !drawn("a") && !drawn("│\u{301}"));
+    }
+
+    #[test]
+    fn shapes_fill_their_cell() {
+        // A full block covers the cell, a vertical line its middle column.
+        assert_eq!(
+            shape("█", 10.0, 20.0, 8.0, 16.0),
+            Some(Shape::Fill(vec![(10.0, 20.0, 8.0, 16.0)]))
+        );
+        // Down then up from the center, overlapping on its pixel.
+        assert_eq!(
+            shape("│", 10.0, 20.0, 8.0, 16.0),
+            Some(Shape::Fill(vec![
+                (14.0, 29.0, 1.0, 8.0),
+                (14.0, 20.0, 1.0, 9.0)
+            ]))
+        );
+        assert_eq!(
+            shape("▒", 10.0, 20.0, 8.0, 16.0),
+            Some(Shape::Shade((10.0, 20.0, 8.0, 16.0), 0.5))
+        );
     }
 }

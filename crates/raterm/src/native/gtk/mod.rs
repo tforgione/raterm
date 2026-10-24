@@ -3,7 +3,6 @@
 //! child web views placed in the flow, which `Flow` lays out.
 
 mod blocks;
-mod boxes;
 mod draw;
 mod input;
 

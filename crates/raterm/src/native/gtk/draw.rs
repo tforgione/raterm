@@ -1,4 +1,5 @@
-//! Drawing the grid with Pango, in the terminal's colors.
+//! Drawing the grid with Cairo and Pango: the `Canvas` of Linux, the
+//! background, and the images of the rows kept from frame to frame.
 
 use std::collections::HashMap;
 
@@ -6,12 +7,15 @@ use gtk::prelude::*;
 use gtk::{cairo, pango};
 use raterm::config;
 use raterm::graphics::{Image, Images, Pixels};
-use raterm::term::{Attrs, CursorShape, Line, Run, Terminal};
+use raterm::term::{Attrs, Line, Terminal};
 
-use super::{View, boxes};
-use crate::native::flow::{PAD_X, PAD_Y, Visual};
-use crate::native::runs::{cells, regional, units, wide};
-use crate::native::theme::{rgb, theme};
+use super::View;
+use crate::native::boxes::{Segment, Shape};
+use crate::native::flow::{PAD_Y, Visual};
+use crate::native::paint::{self, Canvas, Marks, Slice, Span, Style};
+use crate::native::theme::theme;
+
+pub(super) use crate::native::paint::INDICATOR_SHOWN;
 
 /// `[background] image`, if set and readable.
 pub(super) fn load_image(background: &config::Background) -> Option<gtk::gdk_pixbuf::Pixbuf> {
@@ -63,7 +67,6 @@ impl View {
             }
         }
         cr.set_operator(cairo::Operator::Over);
-        let style = self.area.style_context();
         self.session.read(|term| {
             (self.images.borrow_mut()).retain(|&id, _| term.images.get(id).is_some());
             // Rows kept may show images since removed, which their cells
@@ -76,11 +79,17 @@ impl View {
             for (i, visual) in visuals.iter().enumerate() {
                 let y = PAD_Y + i as f64 * self.flow.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
-                    let marks = self.marks(term, line, start, at);
-                    self.draw_line(cr, &style, i, line, start, y, &marks, &term.images);
+                    let marks = self.flow.marks(term, line, start, at);
+                    self.draw_line(cr, i, line, start, y, &marks, &term.images);
                 }
             }
-            self.draw_indicator(cr, term);
+            let (w, h) = (
+                self.area.allocated_width() as f64,
+                self.area.allocated_height() as f64,
+            );
+            if let Some((x, y, w, h, alpha)) = self.flow.indicator(term, w, h) {
+                self.canvas(cr).fill_rounded(x, y, w, h, theme().fg, alpha);
+            }
         });
     }
 
@@ -127,45 +136,6 @@ impl View {
         Some(backdrop)
     }
 
-    fn marks(&self, term: &Terminal, line: &Line, start: usize, at: u64) -> Marks {
-        let (found, current) = match &self.flow.search {
-            Some(search) => search.cells(line, at),
-            None => (Vec::new(), None),
-        };
-        let has_cursor = line.runs.iter().any(|r| r.style.attrs.has(Attrs::CURSOR));
-        Marks {
-            selected: self
-                .flow
-                .selection
-                .and_then(|s| s.cells_of(term, at, start)),
-            block: self.flow.selection.is_some_and(|s| s.block.is_some()),
-            found,
-            current,
-            cursor: has_cursor.then(|| self.cursor_look(term)),
-        }
-    }
-
-    /// How the cursor looks now: hollow without the focus, as in other
-    /// terminals, and away half of the time when it blinks.
-    fn cursor_look(&self, term: &Terminal) -> Look {
-        let (shape, blinks) = term.cursor();
-        if shape == CursorShape::Hidden {
-            Look::Hidden
-        } else if !self.flow.focused.get() {
-            Look::Hollow
-        } else if blinks && !self.flow.blink_on.get() {
-            Look::Hidden
-        } else {
-            match shape {
-                CursorShape::Block => Look::Block,
-                CursorShape::Beam => Look::Bar,
-                CursorShape::Underline => Look::Underline,
-                CursorShape::HollowBlock => Look::Hollow,
-                CursorShape::Hidden => Look::Hidden,
-            }
-        }
-    }
-
     /// The rows of the view that would not be drawn as they were, or `None`
     /// when the whole view has to be (blocks, scroll indicator, another
     /// number of rows).
@@ -184,7 +154,7 @@ impl View {
             let Visual::Text { line, start, at } = *visual else {
                 return None;
             };
-            let marks = self.marks(term, line, start, at);
+            let marks = self.flow.marks(term, line, start, at);
             if !rows
                 .get(i)
                 .and_then(Option::as_ref)
@@ -196,79 +166,6 @@ impl View {
         Some(changed)
     }
 
-    /// A thin rounded bar at the right edge, where the view is in the flow:
-    /// fully shown while scrolling, then fading. The flow counts a row per
-    /// entry of the history, and blocks for the rows
-    /// they were measured to take: exact for most lines, cheap with a long
-    /// history, as blocks are few.
-    fn draw_indicator(&self, cr: &cairo::Context, term: &Terminal) {
-        let Some(at) = self.flow.scrolled_at.get() else {
-            return;
-        };
-        let age = at.elapsed();
-        let alpha = if age < INDICATOR_SOLID {
-            0.5
-        } else {
-            0.5 * (1.0
-                - (age - INDICATOR_SOLID).as_secs_f64()
-                    / (INDICATOR_SHOWN - INDICATOR_SOLID).as_secs_f64())
-        };
-        let rows = self.flow.size.1 as f64;
-        let used = term
-            .screen()
-            .iter()
-            .rposition(|l| !l.runs.is_empty())
-            .map_or(1, |y| y + 1);
-        let first = term.history.first();
-        let blocks: usize = self
-            .flow
-            .heights
-            .borrow()
-            .keys()
-            .filter(|&&n| n >= first)
-            .map(|&n| self.flow.block_rows(n) - 1)
-            .sum();
-        let total = (term.history.next() - first) as f64 + (used + blocks) as f64;
-        if alpha <= 0.0 || term.alt_screen() || total <= rows {
-            return;
-        }
-        let (w, h) = (
-            self.area.allocated_width() as f64,
-            self.area.allocated_height() as f64,
-        );
-        let track = h - 4.0;
-        let height = (rows / total * track).max(24.0);
-        let top =
-            (total - rows - self.flow.scroll as f64).max(0.0) / (total - rows) * (track - height);
-        let (x, y, width, r) = (w - 5.0, 2.0 + top, 3.0, 1.5);
-        set_color(cr, theme().fg, alpha);
-        cr.new_sub_path();
-        cr.arc(
-            x + r,
-            y + r,
-            r,
-            std::f64::consts::PI,
-            1.5 * std::f64::consts::PI,
-        );
-        cr.arc(x + width - r, y + r, r, 1.5 * std::f64::consts::PI, 0.0);
-        cr.arc(
-            x + width - r,
-            y + height - r,
-            r,
-            0.0,
-            0.5 * std::f64::consts::PI,
-        );
-        cr.arc(
-            x + r,
-            y + height - r,
-            r,
-            0.5 * std::f64::consts::PI,
-            std::f64::consts::PI,
-        );
-        cr.close_path();
-        let _ = cr.fill();
-    }
-
     /// Draws cells `start..start + cols` of a line at height `y`, row `row`
     /// of the view, with the cells of `marks` in their colors. The image of
     /// the row is kept, and drawn again as it is while the row stays the
@@ -277,7 +174,6 @@ impl View {
     fn draw_line(
         &self,
         cr: &cairo::Context,
-        style: &gtk::StyleContext,
         row: usize,
         line: &Line,
         start: usize,
@@ -311,9 +207,13 @@ impl View {
             let Ok(rc) = cairo::Context::new(&image) else {
                 return;
             };
-            self.render_slices(&rc, line, start, margin, images, true);
-            self.render_line(&rc, style, line, start, margin, marks);
-            self.render_slices(&rc, line, start, margin, images, false);
+            let own = |c: char| {
+                self.coverage
+                    .as_ref()
+                    .is_some_and(|cov| cov.get(c as i32) == pango::CoverageLevel::Exact)
+            };
+            let ops = self.flow.plan_row(line, start, margin, marks, images, own);
+            paint::paint(&mut self.canvas(&rc), &ops);
             raterm::trace!("rendered {row}");
             // Output that came after the rows to draw were picked changed
             // this one too: kept as drawn but clipped, it would stay stale.
@@ -336,204 +236,14 @@ impl View {
         let _ = cr.fill();
     }
 
-    /// Draws cells `start..start + cols` of a line at height `y` of `cr`.
-    fn render_line(
-        &self,
-        cr: &cairo::Context,
-        style: &gtk::StyleContext,
-        line: &Line,
-        start: usize,
-        y: f64,
-        marks: &Marks,
-    ) {
-        let (cw, ch) = self.flow.cell;
-        let cols = self.flow.size.0 as usize;
-        // The line ends at its last char: the rest of a block is drawn here.
-        if let Some((s, e)) = marks.selected.filter(|_| marks.block) {
-            let end: usize = line.runs.iter().map(cells).sum();
-            let (s, e) = (s.max(end), e.min(start + cols));
-            if s < e {
-                set_color(cr, theme().selection, 1.0);
-                cr.rectangle(PAD_X + (s - start) as f64 * cw, y, (e - s) as f64 * cw, ch);
-                let _ = cr.fill();
-            }
-        }
-        // Parts of the row: cells of the same run with the same mark.
-        let mut parts = Vec::new();
-        let mut col = 0;
-        for run in &line.runs {
-            let n = cells(run);
-            if col + n <= start {
-                col += n;
-                continue;
-            }
-            if col >= start + cols {
-                break;
-            }
-            let chars: Vec<(usize, &str)> = units(run)
-                .into_iter()
-                .map(|(x, text)| (col + x, text))
-                .filter(|&(x, _)| x >= start && x < start + cols)
-                .collect();
-            col += n;
-            for part in chars.chunk_by(|a, b| marks.at(a.0) == marks.at(b.0)) {
-                parts.push((run, part.to_vec(), marks.at(part[0].0)));
-            }
-        }
-        let Some(first) = parts.first().map(|(_, chars, _)| chars[0].0) else {
-            return;
-        };
-        // A row of the font's own glyphs, a cell each, is shaped as one text,
-        // its styles as attributes: shaping each part on its own took 10 ms
-        // for a screen of code, and each char on its own 26 ms for one of
-        // French. Glyphs of fallback fonts are drawn cell by cell.
-        let own = |c: char| {
-            c.is_ascii()
-                || self
-                    .coverage
-                    .as_ref()
-                    .is_some_and(|cov| cov.get(c as i32) == pango::CoverageLevel::Exact)
-        };
-        let whole = parts.iter().all(|(run, chars, _)| {
-            run.cluster == 0 && wide(run) == 1 && chars.iter().all(|&(_, c)| c.chars().all(own))
-        });
+    fn canvas<'a>(&'a self, cr: &'a cairo::Context) -> CairoCanvas<'a> {
         let layout = self.area.create_pango_layout(None);
         layout.set_font_description(Some(&self.font));
-        let attrs = pango::AttrList::new();
-        let mut text = String::new();
-        // Box drawing chars, drawn by raterm after the text.
-        let mut drawn = Vec::new();
-        for (run, chars, mark) in &parts {
-            let (fg, bg) = colors(run, *mark, marks.cursor);
-            let x = PAD_X + (chars[0].0 - start) as f64 * cw;
-            if let Some(bg) = bg {
-                set_color(cr, bg, 1.0);
-                cr.rectangle(x, y, (chars.len() * wide(run)) as f64 * cw, ch);
-                let _ = cr.fill();
-            }
-            let hidden = run.style.attrs.has(Attrs::HIDDEN);
-            if whole {
-                let from = text.len() as u32;
-                for &(cell, c) in chars {
-                    if !hidden && boxes::drawn(c) {
-                        drawn.push((cell, c, fg));
-                    }
-                    text.push_str(if hidden || boxes::drawn(c) { " " } else { c });
-                }
-                text_attrs(&attrs, fg, run.style.attrs, from..text.len() as u32);
-                continue;
-            }
-            // Blanks have nothing more to draw: full-screen programs paint
-            // with them.
-            let lined = run.style.attrs.has(Attrs::UNDERLINE | Attrs::STRIKE);
-            if hidden || !lined && chars.iter().all(|&(_, c)| c == " ") {
-                continue;
-            }
-            let attrs = pango::AttrList::new();
-            text_attrs(&attrs, fg, run.style.attrs, 0..u32::MAX);
-            layout.set_attributes(Some(&attrs));
-            // Glyphs of fallback fonts have other widths: each cell is drawn
-            // at its place, so that the rest of the line stays on the grid,
-            // and on the baseline of the configured font, as their fonts
-            // have other heights. Two regional indicators make a flag: drawn
-            // as one glyph from the first cell.
-            let mut i = 0;
-            while i < chars.len() {
-                let (cell, first) = chars[i];
-                let mut text = first.to_owned();
-                i += 1;
-                if boxes::drawn(first) {
-                    drawn.push((cell, first, fg));
-                    continue;
-                }
-                if regional(&text) && i < chars.len() && regional(chars[i].1) {
-                    text += chars[i].1;
-                    i += 1;
-                }
-                layout.set_text(&text);
-                let shift = self.baseline - layout.baseline() as f64 / pango::SCALE as f64;
-                let x = PAD_X + (cell - start) as f64 * cw;
-                gtk::render_layout(style, cr, x, y + shift, &layout);
-            }
-        }
-        if whole {
-            layout.set_text(&text);
-            layout.set_attributes(Some(&attrs));
-            gtk::render_layout(style, cr, PAD_X + (first - start) as f64 * cw, y, &layout);
-        }
-        for (cell, c, fg) in drawn {
-            set_color(cr, fg, 1.0);
-            boxes::draw(cr, c, PAD_X + (cell - start) as f64 * cw, y, cw, ch);
-        }
-        // A block cursor is drawn by its colors; the others over the text.
-        let cursor = parts
-            .iter()
-            .find(|(run, ..)| run.style.attrs.has(Attrs::CURSOR));
-        if let (Some((run, chars, _)), Some(look)) = (cursor, marks.cursor) {
-            let x = PAD_X + (chars[0].0 - start) as f64 * cw;
-            let w = (chars.len() * wide(run)) as f64 * cw;
-            set_color(cr, theme().cursor, 1.0);
-            match look {
-                Look::Bar => cr.rectangle(x, y, 2.0, ch),
-                Look::Underline => cr.rectangle(x, y + ch - 2.0, w, 2.0),
-                Look::Hollow => {
-                    cr.set_line_width(1.0);
-                    cr.rectangle(x + 0.5, y + 0.5, w - 1.0, ch - 1.0);
-                    let _ = cr.stroke();
-                }
-                Look::Block | Look::Hidden => {}
-            }
-            let _ = cr.fill();
-        }
-    }
-}
-
-impl View {
-    /// Draws the slices of images cells of a line show, those under the
-    /// text or over it, at height `y` of `cr`: an image keeps its size in
-    /// cells, whatever the zoom.
-    fn render_slices(
-        &self,
-        cr: &cairo::Context,
-        line: &Line,
-        start: usize,
-        y: f64,
-        images: &Images,
-        under: bool,
-    ) {
-        let (cw, ch) = self.flow.cell;
-        let end = start + self.flow.size.0 as usize;
-        for shown in &line.images {
-            let slice = shown.slice;
-            let (from, to) = (shown.at.max(start), (shown.at + shown.len).min(end));
-            if from < to
-                && let Some(image) = images.get(slice.image)
-                && image.under == under
-                && let Some(surface) = self.surface(slice.image, image)
-            {
-                let (iw, ih) = image.cell;
-                let (x, w) = (PAD_X + (from - start) as f64 * cw, (to - from) as f64 * cw);
-                // Where the cell `from` starts in the image's pixels.
-                let col = (slice.col as usize + from - shown.at) as f64;
-                let (sx, sy) = (
-                    col * iw - image.offset.0,
-                    slice.row as f64 * ih - image.offset.1,
-                );
-                let (left, top, sw, sh) = image.source;
-                cr.save().ok();
-                cr.rectangle(x, y, w, ch);
-                cr.clip();
-                cr.translate(x, y);
-                cr.scale(cw / iw, ch / ih);
-                cr.translate(-sx - left as f64, -sy - top as f64);
-                cr.rectangle(left as f64, top as f64, sw as f64, sh as f64);
-                cr.clip();
-                let _ = cr.set_source_surface(&surface, 0.0, 0.0);
-                // Smooth when enlarged, as kitty draws them.
-                cr.source().set_filter(cairo::Filter::Bilinear);
-                let _ = cr.paint();
-                cr.restore().ok();
-            }
+        CairoCanvas {
+            cr,
+            view: self,
+            layout,
+            style: self.area.style_context(),
         }
     }
 
@@ -579,6 +289,115 @@ impl View {
     }
 }
 
+/// Painting with Cairo, text with Pango in the configured font.
+struct CairoCanvas<'a> {
+    cr: &'a cairo::Context,
+    view: &'a View,
+    layout: pango::Layout,
+    style: gtk::StyleContext,
+}
+
+impl Canvas for CairoCanvas<'_> {
+    fn fill(&mut self, x: f64, y: f64, w: f64, h: f64, rgb: u32, alpha: f64) {
+        set_color(self.cr, rgb, alpha);
+        self.cr.rectangle(x, y, w, h);
+        let _ = self.cr.fill();
+    }
+
+    fn stroke_rect(&mut self, x: f64, y: f64, w: f64, h: f64, rgb: u32, width: f64) {
+        set_color(self.cr, rgb, 1.0);
+        self.cr.set_line_width(width);
+        self.cr.rectangle(x, y, w, h);
+        let _ = self.cr.stroke();
+    }
+
+    fn fill_rounded(&mut self, x: f64, y: f64, w: f64, h: f64, rgb: u32, alpha: f64) {
+        use std::f64::consts::PI;
+        let (cr, r) = (self.cr, w / 2.0);
+        set_color(cr, rgb, alpha);
+        cr.new_sub_path();
+        cr.arc(x + r, y + r, r, PI, 1.5 * PI);
+        cr.arc(x + w - r, y + r, r, 1.5 * PI, 0.0);
+        cr.arc(x + w - r, y + h - r, r, 0.0, 0.5 * PI);
+        cr.arc(x + r, y + h - r, r, 0.5 * PI, PI);
+        cr.close_path();
+        let _ = cr.fill();
+    }
+
+    fn text(&mut self, x: f64, y: f64, text: &str, spans: &[Span]) {
+        let attrs = pango::AttrList::new();
+        for span in spans {
+            text_attrs(&attrs, span.style, span.start as u32..span.end as u32);
+        }
+        self.layout.set_text(text);
+        self.layout.set_attributes(Some(&attrs));
+        gtk::render_layout(&self.style, self.cr, x, y, &self.layout);
+    }
+
+    fn glyph(&mut self, x: f64, y: f64, text: &str, style: Style) {
+        let attrs = pango::AttrList::new();
+        text_attrs(&attrs, style, 0..u32::MAX);
+        self.layout.set_attributes(Some(&attrs));
+        self.layout.set_text(text);
+        let shift = self.view.baseline - self.layout.baseline() as f64 / pango::SCALE as f64;
+        gtk::render_layout(&self.style, self.cr, x, y + shift, &self.layout);
+    }
+
+    fn shape(&mut self, shape: &Shape, rgb: u32) {
+        let cr = self.cr;
+        set_color(cr, rgb, 1.0);
+        match shape {
+            Shape::Fill(rects) => {
+                for &(x, y, w, h) in rects {
+                    cr.rectangle(x, y, w, h);
+                }
+                let _ = cr.fill();
+            }
+            &Shape::Shade((x, y, w, h), alpha) => {
+                let _ = cr.save();
+                cr.rectangle(x, y, w, h);
+                cr.clip();
+                let _ = cr.paint_with_alpha(alpha);
+                let _ = cr.restore();
+            }
+            Shape::Stroke(width, path) => {
+                cr.set_line_width(*width);
+                for segment in path {
+                    match *segment {
+                        Segment::Move(x, y) => cr.move_to(x, y),
+                        Segment::Line(x, y) => cr.line_to(x, y),
+                        Segment::Curve(x1, y1, x2, y2, x3, y3) => {
+                            cr.curve_to(x1, y1, x2, y2, x3, y3)
+                        }
+                    }
+                }
+                let _ = cr.stroke();
+            }
+        }
+    }
+
+    fn image(&mut self, slice: &Slice) {
+        let Some(surface) = self.view.surface(slice.id, slice.image) else {
+            return;
+        };
+        let cr = self.cr;
+        let (left, top, sw, sh) = slice.image.source;
+        cr.save().ok();
+        cr.rectangle(slice.x, slice.y, slice.w, slice.h);
+        cr.clip();
+        cr.translate(slice.x, slice.y);
+        cr.scale(slice.scale.0, slice.scale.1);
+        cr.translate(-slice.from.0 - left as f64, -slice.from.1 - top as f64);
+        cr.rectangle(left as f64, top as f64, sw as f64, sh as f64);
+        cr.clip();
+        let _ = cr.set_source_surface(&surface, 0.0, 0.0);
+        // Smooth when enlarged, as kitty draws them.
+        cr.source().set_filter(cairo::Filter::Bilinear);
+        let _ = cr.paint();
+        cr.restore().ok();
+    }
+}
+
 /// Surfaces of the images in view, by number; `None` for those that could
 /// not be decoded, not to try again.
 pub(super) type Surfaces = HashMap<u32, Option<cairo::ImageSurface>>;
@@ -606,25 +425,9 @@ impl Row {
     }
 }
 
-/// The text and background colors of a run, with a mark and the look of the
-/// cursor.
-fn colors(run: &Run, mark: Mark, cursor: Option<Look>) -> (u32, Option<u32>) {
-    let mut fg = run.style.fg.map_or(theme().fg, rgb);
-    let mut bg = run.style.bg.map(rgb);
-    if run.style.attrs.has(Attrs::CURSOR) && cursor == Some(Look::Block) {
-        (fg, bg) = (theme().bg, Some(theme().cursor));
-    }
-    match mark {
-        Mark::None => {}
-        Mark::Found => (fg, bg) = (theme().bg, Some(theme().palette[3])),
-        Mark::Current => (fg, bg) = (theme().bg, Some(theme().palette[9])),
-        Mark::Selected => (fg, bg) = (theme().selection_text, Some(theme().selection)),
-    }
-    (fg, bg)
-}
-
-/// Adds the attributes of a run's style to bytes `range` of a layout's text.
-fn text_attrs(list: &pango::AttrList, fg: u32, attrs: Attrs, range: std::ops::Range<u32>) {
+/// Adds the attributes of a style to bytes `range` of a layout's text.
+fn text_attrs(list: &pango::AttrList, style: Style, range: std::ops::Range<u32>) {
+    let (fg, attrs) = (style.fg, style.attrs);
     let add = |mut attr: pango::Attribute| {
         attr.set_start_index(range.start);
         attr.set_end_index(range.end);
@@ -650,55 +453,6 @@ fn text_attrs(list: &pango::AttrList, fg: u32, attrs: Attrs, range: std::ops::Ra
     }
     if attrs.has(Attrs::DIM) {
         add(pango::AttrInt::new_foreground_alpha(0x9999).into());
-    }
-}
-
-/// How long the scroll indicator stays, then how long until it starts fading.
-pub(super) const INDICATOR_SHOWN: std::time::Duration = std::time::Duration::from_millis(1000);
-const INDICATOR_SOLID: std::time::Duration = std::time::Duration::from_millis(600);
-
-/// The cells of a line drawn in other colors than their own.
-#[derive(Clone, PartialEq)]
-struct Marks {
-    selected: Option<(usize, usize)>,
-    /// The selection is a block, which covers the blanks past the end of the
-    /// line too.
-    block: bool,
-    found: Vec<(usize, usize)>,
-    current: Option<(usize, usize)>,
-    /// How the cursor looks, on its line only.
-    cursor: Option<Look>,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-pub(super) enum Look {
-    Block,
-    Bar,
-    Underline,
-    Hollow,
-    Hidden,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Mark {
-    None,
-    Found,
-    Current,
-    Selected,
-}
-
-impl Marks {
-    fn at(&self, x: usize) -> Mark {
-        let has = |r: &(usize, usize)| x >= r.0 && x < r.1;
-        if self.selected.as_ref().is_some_and(has) {
-            Mark::Selected
-        } else if self.current.as_ref().is_some_and(has) {
-            Mark::Current
-        } else if self.found.iter().any(has) {
-            Mark::Found
-        } else {
-            Mark::None
-        }
     }
 }
 
