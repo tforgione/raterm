@@ -1,9 +1,14 @@
 [package]
-name = "rat"
+name = "raterm-rat"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+
+# Published as raterm-rat, since rat is taken on crates.io, but installed as rat.
+[[bin]]
+name = "rat"
+path = "src/main.rs"
 
 [dependencies]
 base64 = "0.23"

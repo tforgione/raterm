@@ -1798,15 +1798,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rat"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "clap",
- "ureq",
-]
-
-[[package]]
 name = "raterm"
 version = "0.1.0"
 dependencies = [
@@ -1822,6 +1813,15 @@ dependencies = [
  "tao",
  "toml 1.1.8+spec-1.1.0",
  "webkit2gtk",
+]
+
+[[package]]
+name = "raterm-rat"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "clap",
+ "ureq",
 ]
 
 [[package]]
