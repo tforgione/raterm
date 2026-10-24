@@ -209,6 +209,26 @@ pub struct Update {
 /// the lowercased text).
 pub type Found = (u64, usize, usize);
 
+/// A placement of kitty's on the alternate screen, kept apart from its cells:
+/// text written over it does not erase it, as in kitty, where full-screen
+/// programs send an image, then redraw the text of their frame over it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Overlay {
+    image: u32,
+    /// Its first row on the screen, above it once scrolled out.
+    line: i64,
+    col: usize,
+    cols: usize,
+    rows: usize,
+}
+
+impl Overlay {
+    fn covers(&self, line: i64, col: usize) -> bool {
+        (self.line..self.line + self.rows as i64).contains(&line)
+            && (self.col..self.col + self.cols).contains(&col)
+    }
+}
+
 pub struct Terminal {
     /// Bold text in one of the 8 normal colors uses its bright variant.
     pub bold_is_bright: bool,
@@ -226,6 +246,7 @@ pub struct Terminal {
     /// The images cells show.
     pub images: Images,
     chunks: kitty::Chunks,
+    overlays: Vec<Overlay>,
     /// Cells changed out of `alacritty_terminal`'s sight, which tracks the
     /// lines it changes: the whole screen is rendered again.
     full: bool,
@@ -262,6 +283,7 @@ impl Terminal {
             media: Media::default(),
             images: Images::default(),
             chunks: kitty::Chunks::default(),
+            overlays: Vec::new(),
             full: false,
             history: History::default(),
             screen: Vec::new(),
@@ -292,6 +314,14 @@ impl Terminal {
         for piece in self.filter.feed(bytes) {
             match piece {
                 Piece::Bytes(bytes) => {
+                    // As in kitty, clearing the screen drops its images.
+                    let clears = |seq: &[u8]| bytes.windows(seq.len()).any(|w| w == seq);
+                    if !self.overlays.is_empty()
+                        && (clears(b"\x1b[2J") || clears(b"\x1b[3J") || clears(b"\x1bc"))
+                    {
+                        self.overlays.clear();
+                        self.full = true;
+                    }
                     for chunk in bytes.chunks(CHUNK) {
                         self.parser.advance(&mut self.term, chunk);
                         self.drain_history();
@@ -361,6 +391,10 @@ impl Terminal {
             TermDamage::Partial(lines) => Some(lines.map(|d| d.line).collect()),
         };
         self.term.reset_damage();
+        let overlays = self.overlays.len();
+        let images = &self.images;
+        self.overlays.retain(|o| images.get(o.image).is_some());
+        self.full |= self.overlays.len() != overlays;
         let mut screen = std::mem::take(&mut self.screen);
         let grid = self.term.grid();
         let cursor = self
@@ -370,7 +404,19 @@ impl Terminal {
             .then_some(grid.cursor.point);
         let render = |y: usize| {
             let x = cursor.filter(|c| c.line.0 == y as i32).map(|c| c.column.0);
-            self.render(&grid[GridLine(y as i32)], x)
+            let mut line = self.render(&grid[GridLine(y as i32)], x);
+            for o in self.overlays.iter().filter(|o| o.covers(y as i64, o.col)) {
+                line.images.push(Shown {
+                    at: o.col,
+                    len: o.cols,
+                    slice: Slice {
+                        image: o.image,
+                        row: (y as i64 - o.line) as u16,
+                        col: 0,
+                    },
+                });
+            }
+            line
         };
         match damaged {
             Some(lines) if !self.full && screen.len() == grid.screen_lines() => {
@@ -524,7 +570,7 @@ impl Terminal {
         });
         let bytes = data.size();
         let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
-        let start = self.place(Image::whole(data, self.cell, alt), bytes, cols, rows);
+        let start = self.place(Image::whole(data, self.cell, alt), bytes, cols, rows, false);
         let below = format!("\n\x1b[{}G", start + 1);
         self.parser.advance(&mut self.term, below.as_bytes());
         self.drain_history();
@@ -532,18 +578,35 @@ impl Terminal {
     }
 
     /// Marks `cols × rows` cells from the cursor with the slices of `image`,
-    /// counting `bytes` in the quota, a row at a time and scrolling at the
-    /// bottom: the cursor ends on its last row. The column it started at.
-    fn place(&mut self, image: Image, bytes: usize, cols: usize, rows: usize) -> usize {
+    /// or keeps it `apart` from them (see `Overlay`), counting `bytes` in the
+    /// quota, a row at a time and scrolling at the bottom: the cursor ends on
+    /// its last row. The column it started at.
+    fn place(
+        &mut self,
+        image: Image,
+        bytes: usize,
+        cols: usize,
+        rows: usize,
+        apart: bool,
+    ) -> usize {
         if image.alt {
             self.drop_unseen_alt_images();
         }
         let image = self.images.place(image, bytes);
         let start = self.term.grid().cursor.point.column.0;
         let cols = cols.min(self.term.columns() - start);
+        let first = self.term.grid().cursor.point.line.0 as i64;
         for row in 0..rows {
             if row > 0 {
+                let above = self.term.grid().cursor.point.line;
                 self.parser.advance(&mut self.term, b"\n");
+                // At the bottom, the screen scrolled: its images with it.
+                if self.term.grid().cursor.point.line == above {
+                    self.overlays.iter_mut().for_each(|o| o.line -= 1);
+                }
+            }
+            if apart {
+                continue;
             }
             let line = self.term.grid().cursor.point.line;
             for col in 0..cols {
@@ -554,6 +617,16 @@ impl Terminal {
                 };
                 self.term.grid_mut()[line][Column(start + col)].set_hyperlink(Some(slice.mark()));
             }
+        }
+        if apart {
+            let last = self.term.grid().cursor.point.line.0 as i64;
+            self.overlays.push(Overlay {
+                image,
+                line: (last + 1 - rows as i64).min(first),
+                col: start,
+                cols,
+                rows,
+            });
         }
         self.full = true;
         start
@@ -641,17 +714,18 @@ impl Terminal {
         }
         // An image without an id is only placed: it counts as one.
         let bytes = if cmd.id == 0 { data.size() } else { 0 };
+        let alt = self.term.mode().contains(TermMode::ALT_SCREEN);
         let image = Image {
             data,
             source: (x, y, w, h),
             cell: (cw / sx, ch / sy),
             offset: (ox / sx, oy / sy),
             under: cmd.z < 0,
-            alt: self.term.mode().contains(TermMode::ALT_SCREEN),
+            alt,
             kitty: (cmd.id != 0).then_some((cmd.id, cmd.placement)),
         };
         let at = self.term.grid().cursor.point;
-        let start = self.place(image, bytes, cols, rows);
+        let start = self.place(image, bytes, cols, rows, alt);
         let after = match cmd.stay {
             true => format!("\x1b[{};{}H", at.line.0 + 1, at.column.0 + 1),
             false => format!("\x1b[{}G", start + cols + 1),
@@ -737,7 +811,20 @@ impl Terminal {
     /// The placed images the screen shows, in the cells `at` keeps.
     fn shown(&self, at: impl Fn(alacritty_terminal::index::Point) -> bool) -> HashSet<u32> {
         let grid = self.term.grid();
-        let mut shown = HashSet::new();
+        let mut shown: HashSet<u32> = (self.overlays.iter())
+            .filter(|o| {
+                (0..grid.screen_lines()).any(|y| {
+                    (0..grid.columns()).any(|x| {
+                        o.covers(y as i64, x)
+                            && at(alacritty_terminal::index::Point::new(
+                                GridLine(y as i32),
+                                Column(x),
+                            ))
+                    })
+                })
+            })
+            .map(|o| o.image)
+            .collect();
         for y in 0..grid.screen_lines() {
             let line = GridLine(y as i32);
             for (x, cell) in grid[line][..].iter().enumerate() {
@@ -804,6 +891,7 @@ impl Terminal {
         if alt != self.alt {
             if !alt {
                 self.images.retain(|_, image| !image.alt);
+                self.overlays.clear();
             }
             self.alt = alt;
             update.changed = true;
@@ -1679,6 +1767,49 @@ mod tests {
         term.advance(format!("\x1b[38;5;41m{ph}{d0}{d0}\x1b[39m").as_bytes());
         term.refresh();
         assert_eq!(slices(&term.screen()[2]), []);
+    }
+
+    /// As ratune draws its cover: the image, then the text of the frame
+    /// over it, which leaves it shown in kitty 0.49.
+    #[test]
+    fn kitty_images_of_the_alternate_screen_survive_text_over_them() {
+        let mut term = Terminal::new(20, 10);
+        term.resize(20, 10, (2.0, 4.0));
+        let put = "\x1b[3;5H\x1b_Ga=T,f=24,s=1,v=1,c=4,r=2,i=1,q=2;/wAA\x1b\\";
+        let shown = |term: &mut Terminal| {
+            term.refresh();
+            (0..10)
+                .map(|y| slices(&term.screen()[y]).len())
+                .collect::<Vec<_>>()
+        };
+        term.advance(format!("\x1b[?1049h{put}").as_bytes());
+        assert_eq!(shown(&mut term), [0, 0, 1, 1, 0, 0, 0, 0, 0, 0]);
+        term.advance(b"\x1b[3;1H                    \x1b[4;1H                    ");
+        assert_eq!(shown(&mut term), [0, 0, 1, 1, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(slices(&term.screen()[3])[0].0, 4);
+        // Cleared with the screen, by kitty's deletion, and on exit.
+        term.advance(b"\x1b[2J");
+        assert_eq!(shown(&mut term), [0; 10]);
+        term.advance(put.as_bytes());
+        term.advance(b"\x1b_Ga=d,d=a,q=2\x1b\\");
+        assert_eq!(shown(&mut term), [0; 10]);
+        term.advance(put.as_bytes());
+        term.advance(b"\x1b[?1049l");
+        assert_eq!(shown(&mut term), [0; 10]);
+        // On the main screen, text erases them as Sixel images.
+        term.advance(format!("{put}\x1b[3;5Hxxxx").as_bytes());
+        assert_eq!(shown(&mut term)[2], 0);
+    }
+
+    #[test]
+    fn kitty_images_of_the_alternate_screen_scroll_with_it() {
+        let mut term = Terminal::new(20, 4);
+        term.resize(20, 4, (2.0, 4.0));
+        // Two rows from the last one: the screen scrolls one row.
+        term.advance(b"\x1b[?1049h\x1b[4;1H\x1b_Ga=T,f=24,s=1,v=1,c=2,r=2,i=1,q=2;/wAA\x1b\\");
+        term.refresh();
+        let rows: Vec<usize> = (0..4).map(|y| slices(&term.screen()[y]).len()).collect();
+        assert_eq!(rows, [0, 0, 1, 1]);
     }
 
     #[test]
