@@ -198,11 +198,15 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             // height) still can, from the API.
             settings.set_enable_javascript_markup(false);
         }
-        // Opaque, even when the window is not: WebKit repaints only what
-        // changes (a selection) over what was there, and a translucent or
-        // transparent view lost the rest of the block or built it up.
+        // Transparent, the background of the grid showing, unless blocks have
+        // a color of their own (see Spec-View).
         let bg = |shift: u32| ((background(&self.config) >> shift) & 0xff) as f64 / 255.0;
-        view.set_background_color(&gdk::RGBA::new(bg(16), bg(8), bg(0), 1.0));
+        let alpha = if self.config.blocks.background.is_some() {
+            1.0
+        } else {
+            0.0
+        };
+        view.set_background_color(&gdk::RGBA::new(bg(16), bg(8), bg(0), alpha));
         view.set_can_focus(false);
         // One selection at a time: one in a block clears the others.
         let me = self.me.clone();
@@ -348,7 +352,8 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
     }
 }
 
-/// The background of blocks, as configured.
+/// The background of blocks, as configured, or the terminal's: the color
+/// of text drawn on highlights, and of blocks with one.
 fn background(config: &Config) -> u32 {
     config.blocks.background.map_or(theme().bg, |c| c.0)
 }
@@ -367,7 +372,7 @@ pub(super) fn block_style(config: &Config, cell_width: f64, scale: f64) -> Strin
     };
     format!(
         r#":root {{ --fg: #{fg:06x}; --bg: #{bg:06x}; --inline-code: #e8857f; {vars} color-scheme: dark; }}
-html, body {{ margin: 0; color: var(--fg); background: var(--bg); overflow: hidden; }}
+html, body {{ margin: 0; color: var(--fg); background: {page}; overflow: hidden; }}
 body {{ font: {size}pt/1.5 {family}; padding: 4px 0; overflow-x: auto; }}
 a {{ color: var(--c4); }}
 pre, code {{ font-family: {mono}; font-size: 0.9em; }}
@@ -401,6 +406,11 @@ body.md > table {{ max-width: none; margin: 8px auto; }}
 "#,
         fg = t.fg,
         bg = background(config),
+        page = if config.blocks.background.is_some() {
+            "var(--bg)"
+        } else {
+            "transparent"
+        },
         // Not quite opaque: WebKit makes an opaque selection color translucent.
         sel_r = t.selection >> 16,
         sel_g = t.selection >> 8 & 0xff,
