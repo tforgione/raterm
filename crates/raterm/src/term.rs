@@ -926,7 +926,9 @@ impl Terminal {
                 continue;
             }
             text.push(cell.c);
-            text.extend(cell.zerowidth().into_iter().flatten());
+            if let Some(zerowidth) = cell.zerowidth() {
+                text.extend(zerowidth);
+            }
         }
         Line {
             runs,
