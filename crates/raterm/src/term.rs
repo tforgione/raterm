@@ -1155,6 +1155,35 @@ fn color(color: Color) -> Option<Tint> {
 mod tests {
     use super::*;
 
+    /// The view draws the screen as `refresh` keeps it, from the lines
+    /// alacritty says changed: after any chunk of the recorded sessions, it
+    /// must be the screen rendered whole.
+    #[test]
+    fn refreshed_screen_is_the_screen_rendered_whole() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/data");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|e| e != "in") {
+                continue;
+            }
+            let input = std::fs::read(&path).unwrap();
+            for size in [1, 7, 256] {
+                let mut term = Terminal::new(80, 24);
+                for (i, chunk) in input.chunks(size).enumerate() {
+                    term.advance(chunk);
+                    term.refresh();
+                    let refreshed = term.screen.clone();
+                    (term.full, term.stale) = (true, true);
+                    term.refresh();
+                    assert!(
+                        refreshed == term.screen,
+                        "{path:?}, chunk {i} of {size} bytes"
+                    );
+                }
+            }
+        }
+    }
+
     /// The texts of the entries of the scrollback, "block" for blocks.
     fn scrollback(term: &Terminal) -> Vec<String> {
         (term.history.first()..term.history.next())
