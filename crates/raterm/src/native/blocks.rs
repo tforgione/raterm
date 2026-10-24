@@ -391,6 +391,13 @@ table {{ border-collapse: collapse; margin: 8px 0; }}
 th, td {{ border: 1px solid var(--c8); padding: 4px 10px; text-align: left; vertical-align: top; }}
 th {{ background: rgba(255, 255, 255, 0.08); }}
 tbody tr:nth-child(even) {{ background: rgba(255, 255, 255, 0.04); }}
+.markdown-alert {{ --alert: #4493f8; --icon: "ℹ️"; border-left: 4px solid var(--alert); padding: 0 1em; margin: 1em auto; }}
+.markdown-alert-tip {{ --alert: #3fb950; --icon: "💡"; }}
+.markdown-alert-important {{ --alert: #ab7df8; --icon: "❗"; }}
+.markdown-alert-warning {{ --alert: #d29922; --icon: "⚠️"; }}
+.markdown-alert-caution {{ --alert: #f85149; --icon: "🛑"; }}
+.markdown-alert-title {{ color: var(--alert); font-weight: bold; }}
+.markdown-alert-title::before {{ content: var(--icon) " "; }}
 img {{ max-width: 100%; }}
 body.img img, body.svg img {{ display: block; object-fit: contain; object-position: left top; cursor: zoom-in; }}
 body.svg img {{ width: 100%; }}

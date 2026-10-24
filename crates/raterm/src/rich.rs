@@ -355,6 +355,7 @@ impl Block {
                 let mut options = comrak::Options::default();
                 options.extension.table = true;
                 options.extension.autolink = true;
+                options.extension.alerts = true;
                 // Raw HTML is fine: the result is sandboxed exactly like `html`.
                 options.render.r#unsafe = true;
                 let mut plugins = comrak::options::Plugins::default();
@@ -597,6 +598,15 @@ mod tests {
         };
         let html = b.render(&Media::default()).unwrap().content;
         assert!(html.contains(r#"<a href="https://example.com">"#), "{html}");
+    }
+
+    #[test]
+    fn renders_alerts() {
+        let Piece::Block(b) = block(Kind::Md, b"> [!WARNING]\n> careful\n") else {
+            unreachable!()
+        };
+        let html = b.render(&Media::default()).unwrap().content;
+        assert!(html.contains("markdown-alert-warning"), "{html}");
     }
 
     #[test]
