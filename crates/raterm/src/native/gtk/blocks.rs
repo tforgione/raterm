@@ -13,15 +13,8 @@ use webkit2gtk::{
 };
 
 use super::View;
+use crate::native::flow::Find;
 use crate::native::theme::theme;
-
-/// A step of the search in a block.
-pub(super) enum Find<'a> {
-    Start { query: &'a str, backwards: bool },
-    Next,
-    Previous,
-    Finish,
-}
 
 /// Finds the matches in the text of a block (each text node, ignoring case),
 /// with raterm's own script: WebKit's own search left slices of old highlights
@@ -70,8 +63,8 @@ impl View {
     /// The size of an image block: at most `h` lines and
     /// `[images] max_height`, at most `w` columns.
     fn image_style(&self, block: &Rendered) -> String {
-        let (cw, ch) = self.cell;
-        let lines = match (block.h, self.max_image_lines) {
+        let (cw, ch) = self.flow.cell;
+        let lines = match (block.h, self.flow.config.images.max_height) {
             (Some(h), Some(max)) => Some(h.min(max)),
             (h, max) => h.or(max),
         };
@@ -147,7 +140,7 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
         };
         let script = match find {
             Find::Start { query, backwards } => {
-                FIND.replace("QUERY", &serde_json::to_string(query).unwrap())
+                FIND.replace("QUERY", &serde_json::to_string(&query).unwrap())
                     .replace("BACKWARDS", &backwards.to_string())
                     + SHOW
             }
@@ -161,10 +154,10 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
     /// Clears the selection of the grid and those of the blocks, but the
     /// block `keep`.
     pub(super) fn clear_selections(&mut self, keep: Option<u64>) {
-        if self.selection.take().is_some() {
+        if self.flow.selection.take().is_some() {
             self.area.queue_draw();
         }
-        self.block_selected = None;
+        self.flow.block_selected = None;
         for (entry, view) in &self.blocks {
             if Some(*entry) != keep {
                 view.evaluate_javascript(
@@ -198,8 +191,8 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
         }
         // Transparent, the background of the grid showing, unless blocks have
         // a color of their own (see Spec-View).
-        let bg = |shift: u32| ((background(&self.config) >> shift) & 0xff) as f64 / 255.0;
-        let alpha = if self.config.blocks.background.is_some() {
+        let bg = |shift: u32| ((background(&self.flow.config) >> shift) & 0xff) as f64 / 255.0;
+        let alpha = if self.flow.config.blocks.background.is_some() {
             1.0
         } else {
             0.0
@@ -236,7 +229,7 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             if let Some(view) = me.upgrade() {
                 let mut view = view.borrow_mut();
                 view.clear_selections(Some(entry));
-                view.block_selected = Some(entry);
+                view.flow.block_selected = Some(entry);
             }
             glib::Propagation::Proceed
         });
@@ -282,13 +275,13 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             if event == LoadEvent::Finished
                 && let Some(this) = me.upgrade()
                 && let Ok(this) = this.try_borrow()
-                && let Some(search) = &this.search
+                && let Some(search) = &this.flow.search
                 && search.block == Some(entry)
             {
                 this.find_in_block(
                     entry,
                     Find::Start {
-                        query: &this.search_entry.text(),
+                        query: this.search_entry.text().to_string(),
                         backwards: true,
                     },
                 );
@@ -321,8 +314,8 @@ span {{ position: absolute; top: 8px; right: 12px; font: 28px/1 sans-serif; colo
             }
         });
         let redraw = self.redraw.clone();
-        let heights = Rc::downgrade(&self.heights);
-        let widths = Rc::downgrade(&self.table_widths);
+        let heights = Rc::downgrade(&self.flow.heights);
+        let widths = Rc::downgrade(&self.flow.table_widths);
         let me = self.me.clone();
         view.connect_title_notify(move |view| {
             let Some(title) = view.title() else { return };

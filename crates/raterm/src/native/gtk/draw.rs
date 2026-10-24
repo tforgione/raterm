@@ -8,7 +8,8 @@ use raterm::config;
 use raterm::graphics::{Image, Images, Pixels};
 use raterm::term::{Attrs, CursorShape, Line, Run, Terminal};
 
-use super::{PAD_X, PAD_Y, View, Visual, boxes};
+use super::{View, boxes};
+use crate::native::flow::{PAD_X, PAD_Y, Visual};
 use crate::native::runs::{cells, regional, units, wide};
 use crate::native::theme::{rgb, theme};
 
@@ -49,7 +50,7 @@ impl View {
     pub(super) fn draw(&self, cr: &cairo::Context) {
         // Replaces what was there: painted over, a translucent background
         // would build up.
-        let opacity = self.config.window.opacity();
+        let opacity = self.flow.config.window.opacity();
         cr.set_operator(cairo::Operator::Source);
         match self.backdrop() {
             Some(backdrop) => {
@@ -70,10 +71,10 @@ impl View {
             if self.removed.replace(term.images.removed) != term.images.removed {
                 self.rows.borrow_mut().clear();
             }
-            let visuals = self.visuals(term);
+            let visuals = self.flow.visuals(term);
             self.drawn.set(visuals.len());
             for (i, visual) in visuals.iter().enumerate() {
-                let y = PAD_Y + i as f64 * self.cell.1;
+                let y = PAD_Y + i as f64 * self.flow.cell.1;
                 if let Visual::Text { line, start, at } = *visual {
                     let marks = self.marks(term, line, start, at);
                     self.draw_line(cr, &style, i, line, start, y, &marks, &term.images);
@@ -99,7 +100,7 @@ impl View {
         set_color(&cr, theme().bg, 1.0);
         let _ = cr.paint();
         let (iw, ih) = (image.width() as f64, image.height() as f64);
-        let background = &self.config.background;
+        let background = &self.flow.config.background;
         match background.fit {
             config::Fit::Tile => {
                 cr.set_source_pixbuf(image, 0.0, 0.0);
@@ -127,14 +128,17 @@ impl View {
     }
 
     fn marks(&self, term: &Terminal, line: &Line, start: usize, at: u64) -> Marks {
-        let (found, current) = match &self.search {
+        let (found, current) = match &self.flow.search {
             Some(search) => search.cells(line, at),
             None => (Vec::new(), None),
         };
         let has_cursor = line.runs.iter().any(|r| r.style.attrs.has(Attrs::CURSOR));
         Marks {
-            selected: self.selection.and_then(|s| s.cells_of(term, at, start)),
-            block: self.selection.is_some_and(|s| s.block.is_some()),
+            selected: self
+                .flow
+                .selection
+                .and_then(|s| s.cells_of(term, at, start)),
+            block: self.flow.selection.is_some_and(|s| s.block.is_some()),
             found,
             current,
             cursor: has_cursor.then(|| self.cursor_look(term)),
@@ -147,9 +151,9 @@ impl View {
         let (shape, blinks) = term.cursor();
         if shape == CursorShape::Hidden {
             Look::Hidden
-        } else if !self.focused.get() {
+        } else if !self.flow.focused.get() {
             Look::Hollow
-        } else if blinks && !self.blink_on.get() {
+        } else if blinks && !self.flow.blink_on.get() {
             Look::Hidden
         } else {
             match shape {
@@ -166,9 +170,9 @@ impl View {
     /// when the whole view has to be (blocks, scroll indicator, another
     /// number of rows).
     pub(super) fn changed_rows(&self, term: &Terminal) -> Option<Vec<usize>> {
-        let visuals = self.visuals(term);
+        let visuals = self.flow.visuals(term);
         if visuals.len() != self.drawn.get()
-            || self.scrolled_at.get().is_some()
+            || self.flow.scrolled_at.get().is_some()
             || self.removed.get() != term.images.removed
         {
             return None;
@@ -184,7 +188,7 @@ impl View {
             if !rows
                 .get(i)
                 .and_then(Option::as_ref)
-                .is_some_and(|r| r.is(line, start, &marks, self.cell.0, width))
+                .is_some_and(|r| r.is(line, start, &marks, self.flow.cell.0, width))
             {
                 changed.push(i);
             }
@@ -198,7 +202,7 @@ impl View {
     /// they were measured to take: exact for most lines, cheap with a long
     /// history, as blocks are few.
     fn draw_indicator(&self, cr: &cairo::Context, term: &Terminal) {
-        let Some(at) = self.scrolled_at.get() else {
+        let Some(at) = self.flow.scrolled_at.get() else {
             return;
         };
         let age = at.elapsed();
@@ -209,7 +213,7 @@ impl View {
                 - (age - INDICATOR_SOLID).as_secs_f64()
                     / (INDICATOR_SHOWN - INDICATOR_SOLID).as_secs_f64())
         };
-        let rows = self.size.1 as f64;
+        let rows = self.flow.size.1 as f64;
         let used = term
             .screen()
             .iter()
@@ -217,11 +221,12 @@ impl View {
             .map_or(1, |y| y + 1);
         let first = term.history.first();
         let blocks: usize = self
+            .flow
             .heights
             .borrow()
             .keys()
             .filter(|&&n| n >= first)
-            .map(|&n| self.block_rows(n) - 1)
+            .map(|&n| self.flow.block_rows(n) - 1)
             .sum();
         let total = (term.history.next() - first) as f64 + (used + blocks) as f64;
         if alpha <= 0.0 || term.alt_screen() || total <= rows {
@@ -233,7 +238,8 @@ impl View {
         );
         let track = h - 4.0;
         let height = (rows / total * track).max(24.0);
-        let top = (total - rows - self.scroll as f64).max(0.0) / (total - rows) * (track - height);
+        let top =
+            (total - rows - self.flow.scroll as f64).max(0.0) / (total - rows) * (track - height);
         let (x, y, width, r) = (w - 5.0, 2.0 + top, 3.0, 1.5);
         set_color(cr, theme().fg, alpha);
         cr.new_sub_path();
@@ -279,7 +285,7 @@ impl View {
         marks: &Marks,
         images: &Images,
     ) {
-        let (cw, ch) = self.cell;
+        let (cw, ch) = self.flow.cell;
         let width = self.area.allocated_width();
         let mut rows = self.rows.borrow_mut();
         if rows.len() <= row {
@@ -340,8 +346,8 @@ impl View {
         y: f64,
         marks: &Marks,
     ) {
-        let (cw, ch) = self.cell;
-        let cols = self.size.0 as usize;
+        let (cw, ch) = self.flow.cell;
+        let cols = self.flow.size.0 as usize;
         // The line ends at its last char: the rest of a block is drawn here.
         if let Some((s, e)) = marks.selected.filter(|_| marks.block) {
             let end: usize = line.runs.iter().map(cells).sum();
@@ -495,8 +501,8 @@ impl View {
         images: &Images,
         under: bool,
     ) {
-        let (cw, ch) = self.cell;
-        let end = start + self.size.0 as usize;
+        let (cw, ch) = self.flow.cell;
+        let end = start + self.flow.size.0 as usize;
         for shown in &line.images {
             let slice = shown.slice;
             let (from, to) = (shown.at.max(start), (shown.at + shown.len).min(end));
