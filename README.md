@@ -235,4 +235,4 @@ wiki, describes the design.
 
 ## License
 
-AGPL-3.0-only.
+GPL-3.0-or-later, see [LICENSE](LICENSE).

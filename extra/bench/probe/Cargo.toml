@@ -2,7 +2,7 @@
 name = "probe"
 version = "0.1.0"
 edition = "2024"
-license = "AGPL-3.0-only"
+license = "GPL-3.0-or-later"
 description = "Tells when a pixel of the screen shows a color, for extra/bench"
 
 # Apart from raterm's workspace: the bench's dependencies stay out of it.
