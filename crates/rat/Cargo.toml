@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "Shows a file as a rich block in the raterm terminal: rendered Markdown, HTML, SVG, images, videos and audio"
+readme = "../../README.md"
+keywords = ["terminal", "raterm", "markdown", "cat"]
+categories = ["command-line-utilities"]
 
 # Published as raterm-rat, since rat is taken on crates.io, but installed as rat.
 [[bin]]

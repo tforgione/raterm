@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+description = "A terminal emulator for Linux that shows Markdown, HTML, SVG, images, videos and audio inline, as rich blocks"
+readme = "../../README.md"
+keywords = ["terminal", "terminal-emulator", "markdown", "gtk", "webkit"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 alacritty_terminal = "0.26"
