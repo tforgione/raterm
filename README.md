@@ -33,23 +33,26 @@ sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev gstreamer1.0-p
 sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
 ```
 
-Then build and install both binaries with Rust 1.89 or later, from
-[rustup](https://rustup.rs) (the packaged Rust of Ubuntu 24.04 is too old):
+Then install both binaries from crates.io with Rust 1.89 or later, from
+[rustup](https://rustup.rs) (the packaged Rust of Ubuntu 24.04 is too old);
+`raterm-rat` installs the `rat` command:
+
+```sh
+cargo install raterm raterm-rat
+```
+
+`extra/raterm.desktop`, in this repository, registers raterm as a terminal
+emulator for application launchers, with the icon `extra/raterm.png`:
 
 ```sh
 git clone https://github.com/tforgione/raterm
 cd raterm
-cargo install --path crates/raterm
-cargo install --path crates/rat
-```
-
-`extra/raterm.desktop` registers raterm as a terminal emulator for application
-launchers, with the icon `extra/raterm.png`:
-
-```sh
 cp extra/raterm.desktop ~/.local/share/applications/
 cp extra/raterm.png ~/.local/share/icons/hicolor/256x256/apps/
 ```
+
+From a clone, `cargo install --path crates/raterm` and
+`cargo install --path crates/rat` build the latest version instead.
 
 ## Usage
 
