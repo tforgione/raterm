@@ -114,7 +114,9 @@ define_class!(
                 .and_then(|url| url.absoluteString())
                 .map(|url| url.to_string())
                 .unwrap_or_default();
-            if url.starts_with("about:") || url.starts_with("data:") {
+            // A `data:` page would lose the block's content security
+            // policy, so only the document itself loads.
+            if url.starts_with("about:") {
                 return handler.call((WKNavigationActionPolicy::Allow,));
             }
             // Without the iframe sandbox, a block could navigate on its own

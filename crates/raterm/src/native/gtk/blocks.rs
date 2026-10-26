@@ -172,7 +172,9 @@ impl View {
                 .as_ref()
                 .is_some_and(|a| a.navigation_type() == NavigationType::LinkClicked);
             match action.and_then(|a| a.request()).and_then(|r| r.uri()) {
-                Some(uri) if !uri.starts_with("about:") && !uri.starts_with("data:") => {
+                // A `data:` page would lose the block's content security
+                // policy, so only the document itself loads.
+                Some(uri) if !uri.starts_with("about:") => {
                     // Without the iframe sandbox, a block could navigate on
                     // its own (`<meta http-equiv="refresh">`): only clicks open.
                     if clicked {
