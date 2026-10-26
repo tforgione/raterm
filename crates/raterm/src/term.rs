@@ -326,6 +326,13 @@ impl Terminal {
                         self.parser.advance(&mut self.term, chunk);
                         self.drain_history();
                     }
+                    // Erasing the screen pushes it to the scrollback, and
+                    // `clear` erases the scrollback before the screen on
+                    // macOS, after on Linux: dropped after the output, in
+                    // either order.
+                    if clears(b"\x1b[3J") {
+                        self.clear_history();
+                    }
                     // Rendering the screen to know whether it changed would
                     // cost what rendering it lazily saves.
                     changed = true;
@@ -838,6 +845,17 @@ impl Terminal {
         shown
     }
 
+    /// Drops the scrollback, and the images only it showed.
+    fn clear_history(&mut self) {
+        self.term.grid_mut().clear_history();
+        self.history.clear();
+        if !self.alt {
+            let seen = self.shown(|_| true);
+            self.images.retain(|id, _| seen.contains(&id));
+        }
+        self.full = true;
+    }
+
     /// Drops the images of the alternate screen that it no longer shows.
     fn drop_unseen_alt_images(&mut self) {
         let seen = self.shown(|_| true);
@@ -1280,6 +1298,24 @@ mod tests {
                 _ => "block".into(),
             })
             .collect()
+    }
+
+    #[test]
+    fn clear_drops_the_scrollback_in_either_order() {
+        // ncurses 6 (Linux) erases the screen then the scrollback, macOS's
+        // `clear` the other way round.
+        for clear in [&b"\x1b[H\x1b[2J\x1b[3J"[..], b"\x1b[3J\x1b[H\x1b[2J"] {
+            let mut term = Terminal::new(10, 3);
+            term.advance(b"a\r\nb\r\nc\r\nd\r\ne");
+            term.advance(clear);
+            assert!(scrollback(&term).is_empty());
+            term.advance(b"f\r\ng\r\nh\r\ni");
+            assert_eq!(scrollback(&term), ["f"]);
+        }
+        // Erasing the screen alone keeps it in the scrollback.
+        let mut term = Terminal::new(10, 3);
+        term.advance(b"a\r\nb\r\nc\r\nd\r\ne\x1b[2J");
+        assert_eq!(scrollback(&term), ["a", "b", "c", "d", "e"]);
     }
 
     #[test]

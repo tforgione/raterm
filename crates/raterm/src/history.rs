@@ -83,6 +83,13 @@ impl History {
         }
     }
 
+    /// Drops every entry (`ESC [ 3 J`); numbers go on from where they were.
+    pub fn clear(&mut self) {
+        self.first = self.next();
+        self.entries.clear();
+        self.ids.clear();
+    }
+
     pub fn get(&self, n: u64) -> Option<&Entry> {
         let i = n.checked_sub(self.first)?;
         self.entries.get(usize::try_from(i).ok()?)
