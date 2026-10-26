@@ -58,8 +58,33 @@ impl Pty {
     /// Current directory of the program.
     #[cfg(target_os = "macos")]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
-        let _pid = self.child.process_id()?;
-        todo!("macOS: proc_pidinfo(pid, PROC_PIDVNODEPATHINFO) with libc, its pvi_cdir")
+        use std::os::unix::ffi::OsStrExt;
+        let pid = self.child.process_id()?;
+        let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
+        // SAFETY: `info` is as large as told, and zeroed.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid as i32,
+                libc::PROC_PIDVNODEPATHINFO,
+                0,
+                info.as_mut_ptr().cast(),
+                size,
+            )
+        };
+        if read != size {
+            return None;
+        }
+        // SAFETY: filled by the kernel.
+        let info = unsafe { info.assume_init() };
+        // libc splits the path in chunks, for old compilers.
+        let path = info.pvi_cdir.vip_path.as_flattened();
+        let bytes: Vec<u8> = path
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
+            .collect();
+        Some(std::ffi::OsStr::from_bytes(&bytes).into())
     }
 
     /// Resizes to `cols × rows` cells, `width × height` pixels in all.
@@ -95,5 +120,22 @@ mod tests {
         // The read ends with EIO on Linux once the child is gone.
         let _ = reader.read_to_end(&mut out);
         assert!(String::from_utf8_lossy(&out).contains("rt-42"));
+    }
+
+    #[test]
+    fn cwd_follows_the_shell() {
+        let (mut pty, mut reader) = Pty::spawn(&["/bin/sh".into()], 80, 24, 0, 0).unwrap();
+        pty.write(b"cd /usr/bin && echo rt-$((40+2))\n").unwrap();
+        let mut out = Vec::new();
+        let mut buf = [0; 1024];
+        while !String::from_utf8_lossy(&out).contains("rt-42") {
+            let n = reader.read(&mut buf).unwrap();
+            out.extend_from_slice(&buf[..n]);
+        }
+        let cwd = pty.cwd().unwrap().canonicalize().unwrap();
+        assert_eq!(
+            cwd,
+            std::path::Path::new("/usr/bin").canonicalize().unwrap()
+        );
     }
 }
