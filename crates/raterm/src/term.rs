@@ -322,17 +322,23 @@ impl Terminal {
                         self.overlays.clear();
                         self.full = true;
                     }
-                    for chunk in bytes.chunks(CHUNK) {
-                        self.parser.advance(&mut self.term, chunk);
-                        self.drain_history();
-                    }
                     // Erasing the screen pushes it to the scrollback, and
                     // `clear` erases the scrollback before the screen on
-                    // macOS, after on Linux: dropped after the output, in
-                    // either order.
-                    if clears(b"\x1b[3J") {
+                    // macOS, after on Linux: dropped once both are read,
+                    // keeping what follows in the same read (`clear && make`).
+                    let mut rest = &bytes[..];
+                    while let Some(at) = rest.windows(4).position(|w| w == b"\x1b[3J") {
+                        let mut end = at + 4;
+                        for seq in [&b"\x1b[H"[..], b"\x1b[2J"] {
+                            if rest[end..].starts_with(seq) {
+                                end += seq.len();
+                            }
+                        }
+                        self.parse(&rest[..end]);
                         self.clear_history();
+                        rest = &rest[end..];
                     }
+                    self.parse(rest);
                     // Rendering the screen to know whether it changed would
                     // cost what rendering it lazily saves.
                     changed = true;
@@ -845,6 +851,13 @@ impl Terminal {
         shown
     }
 
+    fn parse(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(CHUNK) {
+            self.parser.advance(&mut self.term, chunk);
+            self.drain_history();
+        }
+    }
+
     /// Drops the scrollback, and the images only it showed.
     fn clear_history(&mut self) {
         self.term.grid_mut().clear_history();
@@ -1310,6 +1323,11 @@ mod tests {
             term.advance(clear);
             assert!(scrollback(&term).is_empty());
             term.advance(b"f\r\ng\r\nh\r\ni");
+            assert_eq!(scrollback(&term), ["f"]);
+            // What follows in the same read stays (`clear && make`).
+            let mut term = Terminal::new(10, 3);
+            term.advance(b"a\r\nb\r\nc\r\nd\r\ne");
+            term.advance(&[clear, b"f\r\ng\r\nh\r\ni"].concat());
             assert_eq!(scrollback(&term), ["f"]);
         }
         // Erasing the screen alone keeps it in the scrollback.
