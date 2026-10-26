@@ -29,6 +29,19 @@ gtk = "0.18"
 # The web views of rich blocks; 2.40 for evaluate_javascript.
 webkit2gtk = { version = "2.0", features = ["v2_40"] }
 
+# The view on macOS (see Spec-macOS): AppKit, Core Text and WebKit, at the
+# versions tao pulls.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+libc = "0.2"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-core-foundation = "0.3"
+objc2-core-graphics = "0.3"
+objc2-core-text = "0.3"
+objc2-foundation = "0.3"
+objc2-web-kit = "0.3"
+
 [features]
 # Timestamps of the stages of a redraw, for extra/bench/trace.py.
 trace = []

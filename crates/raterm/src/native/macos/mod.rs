@@ -2,11 +2,13 @@
 //! drawn with Core Graphics and Core Text in an `NSView` of its own
 //! (`draw.rs`), rich blocks in `WKWebView`s over it (`blocks.rs`). What the
 //! view decides is `Flow`'s, shared with Linux; input comes from tao's
-//! events. The `todo!()` left are for a Mac: they talk to AppKit.
+//! events.
 
 mod blocks;
 mod draw;
 mod input;
+mod menu;
+mod search;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -22,10 +24,12 @@ use raterm::term::Modes;
 use tao::dpi::LogicalSize;
 use tao::event::{ElementState, Event, MouseButton, MouseScrollDelta, StartCause, WindowEvent};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::platform::macos::WindowExtMacOS;
 use tao::window::{Window, WindowBuilder};
 
 use crate::native::blocks::{
-    BlockView, CLEAR_SELECTION, MEASURE, Told, block_style, find_script, told, viewer_document,
+    BlockView, CLEAR_SELECTION, MEASURE, Told, background, block_style, find_script, told,
+    viewer_document,
 };
 use crate::native::events::{self, Redraw, UserEvent};
 use crate::native::flow::{Action, Find, Flow};
@@ -36,6 +40,8 @@ use crate::native::system::{Clipboard, Which, new_window, open_url};
 use crate::native::theme;
 use blocks::WebView;
 use draw::{Font, Grid};
+use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+use objc2_foundation::NSString;
 
 /// How often a blinking cursor blinks, as on Linux.
 const BLINK: Duration = Duration::from_millis(530);
@@ -68,6 +74,11 @@ struct View {
     next_blink: Instant,
     /// The text of the search field, as last searched.
     search_query: String,
+    /// The search field, while it is open.
+    search_field: Option<search::Field>,
+    /// The input method typed the text of the key being pressed: tao tells
+    /// it (`insertText:`) before the key itself, whose text is the same.
+    typed: bool,
 }
 
 pub fn run(config: Config, command: &[String], title: String) -> Result<(), Error> {
@@ -93,12 +104,13 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         let drawer = me.clone();
         let grid = Grid::new(
             &window,
-            Box::new(move |canvas, width, height| {
+            Box::new(move |surface, width, height| {
                 if let Some(view) = drawer.upgrade()
                     && let Ok(view) = view.try_borrow()
                 {
                     let own = |c: char| view.font.has_glyph(c);
-                    view.flow.draw_frame(canvas, width, height, own);
+                    let mut canvas = surface.canvas(&view.font);
+                    view.flow.draw_frame(&mut canvas, width, height, own);
                 }
             }),
         );
@@ -120,8 +132,13 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             last_click: None,
             next_blink: Instant::now() + BLINK,
             search_query: String::new(),
+            search_field: None,
+            typed: false,
         })
     });
+    menu::install();
+    // tao sends no `Resized` for the first size of the window on macOS.
+    view.borrow_mut().resized();
     events::pump(session, reader, modes, redraw, proxy);
 
     event_loop.run(move |event, _, control_flow| {
@@ -153,6 +170,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 WindowEvent::ReceivedImeText(text) => {
                     v.scroll_to_end();
                     v.session.input(text.as_bytes());
+                    v.typed = true;
                 }
                 WindowEvent::CursorMoved { position, .. } => {
                     let p = position.to_logical::<f64>(v.window.scale_factor());
@@ -229,6 +247,7 @@ impl View {
     fn key(&mut self, event: &tao::event::KeyEvent) {
         let mods = self.mods;
         let key = input::key(event, mods);
+        let typed = std::mem::take(&mut self.typed);
         // Keys belong to the image viewer while it is open.
         if self.viewer.is_some() {
             if key == Some(keys::Key::Named(keys::Named::Escape)) {
@@ -244,6 +263,10 @@ impl View {
                 }
                 Some(Binding::Action(action)) if self.run_action(&action) => return,
                 _ => {}
+            }
+            // Typed already, Option+key as the layout composes it too.
+            if typed {
+                return;
             }
             let modes = *self.flow.modes.lock().unwrap();
             if let Some(data) = encode(key, mods, &modes) {
@@ -378,27 +401,38 @@ impl View {
 
     fn open_search(&mut self) {
         self.flow.search.get_or_insert_default();
-        todo!(
-            "macOS: show a search field (NSSearchField) at the top right, in the terminal's \
-             colors; its text calls search_step(text, true, true) as it changes, Enter \
-             search_step(text, false, true), Shift+Enter search_step(text, false, false), \
-             Escape close_search"
-        )
+        if let Some(field) = &self.search_field {
+            return field.focus();
+        }
+        let me = self.me.clone();
+        let on = Box::new(move |typed| {
+            let Some(view) = me.upgrade() else { return };
+            let Ok(mut view) = view.try_borrow_mut() else {
+                return;
+            };
+            match typed {
+                search::Typed::Changed(text) => view.search_step(&text, true, true),
+                // Enter goes to older matches, up the terminal.
+                search::Typed::Enter { text, shift } => view.search_step(&text, false, !shift),
+                search::Typed::Escape => view.close_search(),
+            }
+        });
+        self.search_field = Some(search::Field::new(self.grid.superview(), on));
     }
 
-    #[allow(dead_code)] // Called by the search field, once it is written.
     fn close_search(&mut self) {
         if let Some(entry) = self.flow.search.as_ref().and_then(|s| s.block) {
             self.find_in_block(entry, Find::Finish);
         }
         self.flow.search = None;
         self.grid.invalidate();
-        todo!("macOS: hide the search field, give the focus back to the grid")
+        if let Some(field) = self.search_field.take() {
+            field.remove(self.window.ns_view());
+        }
     }
 
     /// Goes to the next match of `query`, older or newer, or from the end
     /// for a new query (see `Flow::search_step`).
-    #[allow(dead_code)] // Called by the search field, once it is written.
     fn search_step(&mut self, query: &str, restart: bool, backwards: bool) {
         query.clone_into(&mut self.search_query);
         let blocks = &self.blocks;
@@ -407,7 +441,9 @@ impl View {
         else {
             return;
         };
-        let _no_match = !found.any; // TODO(macOS): the search field's border in red.
+        if let Some(field) = &self.search_field {
+            field.set_found(found.any);
+        }
         // Makes the web view of the block, if it was out of view.
         self.layout();
         for (entry, find) in found.finds {
@@ -506,7 +542,7 @@ impl View {
     /// without scripts nor network, links open in the desktop's handler.
     fn block_view(&mut self, entry: u64, block: &Rendered) -> WebView {
         let html = self.flow.document(block, &self.media, &self.block_style);
-        let transparent = !self.flow.config.opaque_blocks();
+        let opaque = (self.flow.config.opaque_blocks()).then(|| background(&self.flow.config));
         let image = matches!(block.kind, Kind::Img | Kind::Svg).then(|| block.clone());
         let me = self.me.clone();
         let redraw = self.redraw.clone();
@@ -565,7 +601,7 @@ impl View {
                 }
             }
         });
-        let view = WebView::new(self.grid.superview(), transparent, events);
+        let view = WebView::new(self.grid.superview(), opaque, events);
         view.load(&html);
         view
     }
@@ -598,17 +634,22 @@ impl View {
 struct MacClipboard;
 
 impl Clipboard for MacClipboard {
-    fn set(&self, which: Which, _text: &str) {
+    fn set(&self, which: Which, text: &str) {
         if which == Which::Primary {
             return;
         }
-        todo!("macOS: NSPasteboard.generalPasteboard, clearContents, setString:forType: string")
+        let board = NSPasteboard::generalPasteboard();
+        board.clearContents();
+        board.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
     }
 
-    fn paste(&self, which: Which, _then: impl FnOnce(String) + 'static) {
+    fn paste(&self, which: Which, then: impl FnOnce(String) + 'static) {
         if which == Which::Primary {
             return;
         }
-        todo!("macOS: NSPasteboard.generalPasteboard, stringForType: string, then(text)")
+        let board = NSPasteboard::generalPasteboard();
+        if let Some(text) = board.stringForType(unsafe { NSPasteboardTypeString }) {
+            then(text.to_string());
+        }
     }
 }

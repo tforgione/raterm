@@ -151,13 +151,16 @@ Thomas utilise `raterm` au quotidien : ne jamais lancer `pkill raterm`,
 
 ## macOS
 
-La vue macOS est un squelette (`Spec-macOS`) : la boucle d'événements de tao,
-le clavier, la souris et la sélection sont écrits, mais rien n'a tourné sur
-un Mac. Reste chaque `todo!("macOS: …")`, qui dit quoi faire et avec quelle
-API (`grep -rn 'todo!("macOS' crates`) : police et `Canvas` (Core Text,
-Core Graphics), webviews des blocs (`WKWebView`), champ de recherche,
-presse-papier, dossier courant (`proc_pidinfo`). Les crates `objc2-*`
-s'ajoutent aux dépendances macOS de `Cargo.toml` en les écrivant, aux
-versions que tao tire déjà. Ne pas toucher à `native/gtk` pour le Mac : ce
-qui manque au partagé se partage d'abord (`flow`, `paint`, `blocks`…), sans
-changer le comportement Linux.
+La vue macOS est écrite (`Spec-macOS`) et tourne : grille en Core Text et
+Core Graphics dans une `NSView` retournée (`draw.rs`) dont les webviews des
+blocs (`WKWebView`, `blocks.rs`) sont des sous-vues, champ de recherche
+`NSSearchField` (`search.rs`), menu minimal Cmd+Q/W/H/M (`menu.rs`, tao n'en
+fait pas). Pièges : tao n'envoie pas de `Resized` au démarrage (`run` appelle
+`resized`) ; la grille renvoie `nil` à `hitTest:` pour que souris et clavier
+aillent à la vue de tao ; une webview de bloc refuse le premier répondeur et
+renvoie la molette à la vue de tao. Sans permission d'enregistrement
+d'écran, `screencapture` échoue : capturer la vue elle-même
+(`cacheDisplayInRect:toBitmapImageRep:`, différé par
+`performSelector:withObject:afterDelay:` hors de l'emprunt de `View`). Ne
+pas toucher à `native/gtk` pour le Mac : ce qui manque au partagé se partage
+d'abord (`flow`, `paint`, `blocks`…), sans changer le comportement Linux.
