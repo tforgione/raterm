@@ -9,8 +9,8 @@
 > was not reviewed line by line. It is a personal project shared as is, with
 > no guarantee of any kind. Use it at your own risk.
 
-A terminal emulator for Linux, written in Rust, that draws its text with GTK
-and shows rich blocks with WebKit. Regular output (text, ANSI colors, cursor, full-screen programs like vim or
+A terminal emulator for Linux and macOS, written in Rust, that draws its text
+natively (GTK on Linux, Core Text on macOS) and shows rich blocks with WebKit. Regular output (text, ANSI colors, cursor, full-screen programs like vim or
 htop) works as in any terminal, but programs can also insert rich blocks at the
 cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 
@@ -22,8 +22,9 @@ cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 
 ## Installing
 
-raterm runs on Linux only, on X11 and Wayland. It needs WebKitGTK 4.1 and, for
-videos and audio, GStreamer's good plugins (plus libav for H.264 and AAC):
+raterm runs on Linux, on X11 and Wayland, and on macOS. On Linux, it needs
+WebKitGTK 4.1 and, for videos and audio, GStreamer's good plugins (plus libav
+for H.264 and AAC):
 
 ```sh
 # On Ubuntu
@@ -33,6 +34,10 @@ sudo apt install build-essential pkg-config libwebkit2gtk-4.1-dev gstreamer1.0-p
 sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
 ```
 
+On macOS, the system's WebKit is enough: only the Xcode command line tools
+(`xcode-select --install`) are needed, for Rust. The background image
+(`[background] image`) is not drawn on macOS yet.
+
 Then install both binaries from crates.io with Rust 1.89 or later, from
 [rustup](https://rustup.rs) (the packaged Rust of Ubuntu 24.04 is too old);
 `raterm-rat` installs the `rat` command:
@@ -41,8 +46,8 @@ Then install both binaries from crates.io with Rust 1.89 or later, from
 cargo install raterm raterm-rat
 ```
 
-`extra/raterm.desktop`, in this repository, registers raterm as a terminal
-emulator for application launchers, with the icon `extra/raterm.png`:
+On Linux, `extra/raterm.desktop`, in this repository, registers raterm as a
+terminal emulator for application launchers, with the icon `extra/raterm.png`:
 
 ```sh
 git clone https://github.com/tforgione/raterm
@@ -78,6 +83,11 @@ raterm --title NAME -e COMMAND ARGS...  # same options as alacritty
 | `Ctrl+click` | open a link (rich block links open on a plain click) |
 | click on an image | show it full window (`Esc` or any click to close) |
 | `Shift`+click or drag | select text even in programs that use the mouse (vim, htop, tmux) |
+
+On macOS, the shortcuts use Cmd, as other applications do: `Cmd+C` / `Cmd+V`,
+`Cmd+F`, `Cmd+=` / `Cmd+-` / `Cmd+0`, `Cmd+N` (new window), and `Cmd+Q`,
+`Cmd+W`, `Cmd+H`, `Cmd+M` from the menu; Ctrl goes to the program. There is no
+primary selection.
 
 ## rat
 
@@ -215,8 +225,8 @@ Programs writing to the terminal never run code in raterm:
 - The content security policy of blocks forbids any network access, apart
   from raterm's own local media server: blocks can only show their own
   content and inline data.
-- Links open on a click only, in the desktop's handler (`xdg-open`), never in
-  the terminal, and only `http`, `https` and `mailto` links.
+- Links open on a click only, in the desktop's handler (`xdg-open`, `open` on
+  macOS), never in the terminal, and only `http`, `https` and `mailto` links.
 - Local videos and audio are streamed by a small HTTP server on `127.0.0.1`,
   which only serves the files announced by a block, under a random 128-bit
   token.
@@ -229,8 +239,8 @@ cargo clippy -- -D warnings
 ```
 
 The core (`pty`, `term`, `rich`, `media`) is a library tested without a
-window; `native`, the view, is the only module that knows about GTK and
-WebKit. Snapshot tests replay
+window; `native`, the view, is the only module that knows about the window
+toolkit: GTK and WebKitGTK on Linux, AppKit and `WKWebView` on macOS. Snapshot tests replay
 recorded sessions from `crates/raterm/tests/data` (recorded with `record.sh`
 there); `RATERM_UPDATE_SNAPSHOTS=1 cargo test` rewrites them. The
 [specification](https://github.com/tforgione/raterm/wiki/Spec), in the
