@@ -1,11 +1,11 @@
 //! The events of the window's loop (`tao`, on both platforms), and the
 //! thread that feeds the terminal.
 
-use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use raterm::pty::Output;
 use raterm::session::Session;
 use raterm::term::Modes;
 use tao::event_loop::EventLoopProxy;
@@ -48,13 +48,13 @@ impl Redraw {
 /// and tells the loop when the program exits.
 pub(super) fn pump(
     session: Arc<Session>,
-    reader: Box<dyn Read + Send>,
+    output: Output,
     modes: Arc<Mutex<Modes>>,
     redraw: Arc<Redraw>,
     proxy: EventLoopProxy<UserEvent>,
 ) {
     thread::spawn(move || {
-        session.pump(reader, |update| {
+        session.pump(output, |update| {
             if let Some(title) = update.title {
                 let _ = proxy.send_event(UserEvent::Title(title));
             }

@@ -97,7 +97,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let modes = Arc::new(Mutex::new(Modes::default()));
     // The program starts with the cell's size, which it may ask for
     // (`CSI 16 t`) before the window is first sized.
-    let (session, reader) = Session::spawn(&config, command, 80, 24, cell)?;
+    let (session, output) = Session::spawn(&config, command, 80, 24, cell)?;
     // Local videos and audio are streamed to the web views of blocks.
     let media = raterm::media::serve(session.media())?;
     let view = Rc::new_cyclic(|me: &Weak<RefCell<View>>| {
@@ -139,7 +139,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     menu::install();
     // tao sends no `Resized` for the first size of the window on macOS.
     view.borrow_mut().resized();
-    events::pump(session, reader, modes, redraw, proxy);
+    events::pump(session, output, modes, redraw, proxy);
 
     event_loop.run(move |event, _, control_flow| {
         let mut v = view.borrow_mut();

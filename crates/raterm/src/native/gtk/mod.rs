@@ -114,7 +114,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
     let cell = measure(&area, &font);
     // The program starts with the cell's size in pixels, which it may ask
     // for (`CSI 16 t`) before the window is first allocated.
-    let (session, reader) = Session::spawn(&config, command, 80, 24, cell)?;
+    let (session, output) = Session::spawn(&config, command, 80, 24, cell)?;
     // Local videos and audio are streamed to the web views of blocks.
     let media = raterm::media::serve(session.media())?;
     let baseline = draw::baseline(&area, &font);
@@ -361,7 +361,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         });
     }
 
-    events::pump(session.clone(), reader, modes, redraw, proxy);
+    events::pump(session.clone(), output, modes, redraw, proxy);
 
     {
         // Programs can make the cursor blink (DECSCUSR), whatever the

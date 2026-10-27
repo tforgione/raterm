@@ -1,26 +1,56 @@
 use std::io::{Read, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
 pub struct Pty {
     master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
+    pid: Option<u32>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    exited: Arc<AtomicBool>,
+}
+
+/// What the shell writes, and the shell, to wait for.
+pub struct Output {
+    reader: Box<dyn Read + Send>,
     child: Box<dyn Child + Send + Sync>,
+    exited: Arc<AtomicBool>,
+}
+
+impl Output {
+    /// The reader, and a function that returns once the shell has exited.
+    ///
+    /// The reader alone ends only once nothing holds the pty: a process
+    /// that outlives the shell with the terminal as its stderr (`wl-copy`)
+    /// would keep it open.
+    pub fn split(self) -> (Box<dyn Read + Send>, impl FnOnce() + Send) {
+        let Output {
+            reader,
+            mut child,
+            exited,
+        } = self;
+        let wait = move || {
+            let _ = child.wait();
+            exited.store(true, Ordering::Release);
+        };
+        (reader, wait)
+    }
 }
 
 impl Pty {
     /// Spawns `command` (program and arguments) in a new pty of `cols × rows`
-    /// cells, `width × height` pixels, and returns it with a reader on its
-    /// output.
+    /// cells, `width × height` pixels, and returns it with its output.
     pub fn spawn(
         command: &[String],
         cols: u16,
         rows: u16,
         width: u16,
         height: u16,
-    ) -> Result<(Pty, Box<dyn Read + Send>), Error> {
+    ) -> Result<(Pty, Output), Error> {
         let pair = native_pty_system().openpty(size(cols, rows, width, height))?;
         let mut cmd = CommandBuilder::from_argv(command.iter().map(Into::into).collect());
         cmd.env("TERM", "xterm-256color");
@@ -33,13 +63,21 @@ impl Pty {
         drop(pair.slave);
         let reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
+        let exited = Arc::new(AtomicBool::new(false));
+        let pty = Pty {
+            master: pair.master,
+            writer,
+            pid: child.process_id(),
+            killer: child.clone_killer(),
+            exited: exited.clone(),
+        };
         Ok((
-            Pty {
-                master: pair.master,
-                writer,
+            pty,
+            Output {
+                reader,
                 child,
+                exited,
             },
-            reader,
         ))
     }
 
@@ -51,7 +89,7 @@ impl Pty {
     /// Current directory of the program, read from procfs.
     #[cfg(target_os = "linux")]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
-        let pid = self.child.process_id()?;
+        let pid = self.pid?;
         std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
     }
 
@@ -59,7 +97,7 @@ impl Pty {
     #[cfg(target_os = "macos")]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
         use std::os::unix::ffi::OsStrExt;
-        let pid = self.child.process_id()?;
+        let pid = self.pid?;
         let mut info = std::mem::MaybeUninit::<libc::proc_vnodepathinfo>::zeroed();
         let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as i32;
         // SAFETY: `info` is as large as told, and zeroed.
@@ -104,7 +142,10 @@ fn size(cols: u16, rows: u16, pixel_width: u16, pixel_height: u16) -> PtySize {
 
 impl Drop for Pty {
     fn drop(&mut self) {
-        let _ = self.child.kill();
+        // Once reaped, its pid may be another process's.
+        if !self.exited.load(Ordering::Acquire) {
+            let _ = self.killer.kill();
+        }
     }
 }
 
@@ -114,7 +155,8 @@ mod tests {
 
     #[test]
     fn shell_echoes_through_pty() {
-        let (mut pty, mut reader) = Pty::spawn(&["/bin/sh".into()], 80, 24, 0, 0).unwrap();
+        let (mut pty, output) = Pty::spawn(&["/bin/sh".into()], 80, 24, 0, 0).unwrap();
+        let mut reader = output.reader;
         pty.write(b"echo rt-$((40+2))\nexit\n").unwrap();
         let mut out = Vec::new();
         // The read ends with EIO on Linux once the child is gone.
@@ -124,7 +166,8 @@ mod tests {
 
     #[test]
     fn cwd_follows_the_shell() {
-        let (mut pty, mut reader) = Pty::spawn(&["/bin/sh".into()], 80, 24, 0, 0).unwrap();
+        let (mut pty, output) = Pty::spawn(&["/bin/sh".into()], 80, 24, 0, 0).unwrap();
+        let mut reader = output.reader;
         pty.write(b"cd /usr/bin && echo rt-$((40+2))\n").unwrap();
         let mut out = Vec::new();
         let mut buf = [0; 1024];
