@@ -22,7 +22,8 @@ cursor: rendered Markdown, HTML, SVG, images, videos and audio.
 
 ## Installing
 
-raterm runs on Linux, on X11 and Wayland, and on macOS. On Linux, it needs
+raterm runs on Linux, on X11 and Wayland, and on macOS; on Windows, in WSL.
+On Linux, it needs
 WebKitGTK 4.1 and, for videos and audio, GStreamer's good plugins (plus libav
 for H.264 and AAC):
 
@@ -37,6 +38,11 @@ sudo pacman -S webkit2gtk-4.1 gst-plugins-good gst-libav
 On macOS, the system's WebKit is enough: only the Xcode command line tools
 (`xcode-select --install`) are needed, for Rust. The background image
 (`[background] image`) is not drawn on macOS yet.
+
+On Windows, raterm runs in WSL2 with WSLg (Windows 11, or Windows 10 21H2
+and later), installed in WSL as on Ubuntu, plus `xdg-utils` and
+`export BROWSER=explorer.exe` in `~/.profile` so that links open in
+Windows' browser. It does not run natively on Windows.
 
 Then install both binaries from crates.io with Rust 1.89 or later, from
 [rustup](https://rustup.rs) (the packaged Rust of Ubuntu 24.04 is too old);
