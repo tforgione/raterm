@@ -24,14 +24,23 @@ const OPENER: &str = "xdg-open";
 #[cfg(target_os = "macos")]
 const OPENER: &str = "open";
 
-/// Opens a link in the desktop's handler.
-pub(super) fn open_url(url: &str) {
+/// Whether a link may go to the desktop's handler.
+fn openable(url: &str) -> bool {
     // Other schemes (file:, custom app handlers) would let terminal output
-    // launch arbitrary local handlers on a click.
-    if !["http://", "https://", "mailto:"]
+    // launch arbitrary local handlers on a click. A valid URL encodes
+    // spaces, quotes and backslashes; the handler may hand it on through
+    // command lines (`explorer.exe` in WSL) whose quoting rules differ.
+    ["http://", "https://", "mailto:"]
         .iter()
         .any(|s| url.starts_with(s))
-    {
+        && url
+            .bytes()
+            .all(|b| b.is_ascii_graphic() && !b"\"`\\".contains(&b))
+}
+
+/// Opens a link in the desktop's handler.
+pub(super) fn open_url(url: &str) {
+    if !openable(url) {
         return eprintln!("raterm: refusing to open {url:?}");
     }
     match std::process::Command::new(OPENER).arg(url).spawn() {
@@ -52,5 +61,34 @@ pub(super) fn new_window(cwd: Option<std::path::PathBuf>) {
     match command.spawn() {
         Ok(mut child) => drop(thread::spawn(move || child.wait())),
         Err(e) => eprintln!("raterm: cannot open a new window: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openable;
+
+    #[test]
+    fn only_plain_web_and_mail_links_open() {
+        for url in [
+            "https://example.com/a?b=c%20d#e",
+            "http://example.com",
+            "mailto:me@example.com",
+            "https://en.wikipedia.org/wiki/Hilbert's_paradox",
+        ] {
+            assert!(openable(url), "{url}");
+        }
+        for url in [
+            "file:///etc/passwd",
+            "ms-msdt:/id",
+            "https://example.com/a b",
+            "https://example.com/\" --new-window",
+            "https://example.com/`id`",
+            "https://example.com\\..\\x",
+            "https://example.com/\x07",
+            "https://exämple.com",
+        ] {
+            assert!(!openable(url), "{url:?}");
+        }
     }
 }

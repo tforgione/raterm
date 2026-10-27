@@ -75,8 +75,9 @@ cargo clippy -p raterm --target aarch64-apple-darwin -- -D warnings
   `data:` et le serveur média local ; le SVG est affiché en `<img>`.
 - `raterm` n'accède jamais au réseau. C'est `rat --allow-network` qui
   télécharge, jamais `raterm`.
-- Les liens s'ouvrent via `xdg-open` (http, https, mailto seulement), et
-  seulement sur un clic (`NavigationType::LinkClicked`) : sans iframe
+- Les liens s'ouvrent via `xdg-open` (http, https, mailto seulement, en
+  ASCII imprimable sans espace, guillemet double, accent grave ni
+  antislash : `explorer.exe` les reçoit dans WSL), et seulement sur un clic (`NavigationType::LinkClicked`) : sans iframe
   sandboxée, un `<meta http-equiv="refresh">` ouvrirait sinon une page tout
   seul.
 - Le serveur vidéo n'écoute que sur `127.0.0.1`, sous un jeton aléatoire, et
