@@ -67,6 +67,20 @@ cargo clippy -p raterm --target aarch64-apple-darwin -- -D warnings
 - Les `.in`/`.out` de `tests/data` sont des captures réelles : ne jamais les
   réécrire à la main, seulement régénérer les `.out` et relire le diff.
 
+## Publier une version
+
+Seulement sur demande. `raterm` et `raterm-rat` (`rat` est pris sur
+crates.io) partagent la version du workspace et sortent ensemble :
+
+```sh
+# version dans Cargo.toml ([workspace.package]), puis cargo build pour le .lock
+git commit -am "Release X.Y.Z"
+git tag -a vX.Y.Z -m "raterm and raterm-rat X.Y.Z, as published on crates.io"
+cargo publish -p raterm && cargo publish -p raterm-rat
+git push origin main vX.Y.Z           # le tag aussi
+cargo install --locked raterm raterm-rat   # l'install de Thomas, depuis crates.io
+```
+
 ## Sécurité, à ne pas casser
 
 - Chaque bloc est une webview dont le document est le bloc seul : ses
