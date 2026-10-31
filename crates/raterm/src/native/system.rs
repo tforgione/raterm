@@ -51,16 +51,29 @@ pub(super) fn open_url(url: &str) {
 
 /// Opens another window, in the same directory as this one's shell.
 pub(super) fn new_window(cwd: Option<std::path::PathBuf>) {
-    let mut command = match std::env::current_exe() {
-        Ok(exe) => std::process::Command::new(exe),
-        Err(e) => return eprintln!("raterm: cannot find own executable: {e}"),
+    match std::env::current_exe() {
+        Ok(exe) => spawn(std::process::Command::new(exe), cwd),
+        Err(e) => eprintln!("raterm: cannot find own executable: {e}"),
+    }
+}
+
+/// Starts a command bound to a key, in the same directory as the shell.
+pub(super) fn run_command(argv: &[String], cwd: Option<std::path::PathBuf>) {
+    let Some((program, args)) = argv.split_first() else {
+        return;
     };
+    let mut command = std::process::Command::new(program);
+    command.args(args);
+    spawn(command, cwd);
+}
+
+fn spawn(mut command: std::process::Command, cwd: Option<std::path::PathBuf>) {
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
     match command.spawn() {
         Ok(mut child) => drop(thread::spawn(move || child.wait())),
-        Err(e) => eprintln!("raterm: cannot open a new window: {e}"),
+        Err(e) => eprintln!("raterm: cannot start {:?}: {e}", command.get_program()),
     }
 }
 

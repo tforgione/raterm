@@ -209,6 +209,8 @@ pub enum Binding {
     Action(String),
     /// Text sent to the program as if typed.
     Send { send: String },
+    /// A program and its arguments, started in the shell's directory.
+    Command { command: Vec<String> },
 }
 
 impl Config {
@@ -330,6 +332,7 @@ mod tests {
             [keys]
             "ctrl+shift+e" = "new_window"
             "shift+pageup" = { send = "\u001b[5;2~" }
+            "ctrl+shift+t" = { command = ["clone-terminal", "-v"] }
             "#,
         )
         .unwrap();
@@ -345,6 +348,12 @@ mod tests {
             config.keys["shift+pageup"],
             Binding::Send {
                 send: "\x1b[5;2~".into()
+            }
+        );
+        assert_eq!(
+            config.keys["ctrl+shift+t"],
+            Binding::Command {
+                command: vec!["clone-terminal".into(), "-v".into()]
             }
         );
         assert_eq!(config.window.opacity(), 1.0);

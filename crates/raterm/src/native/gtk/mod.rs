@@ -28,7 +28,7 @@ use crate::native::events::{self, Redraw, UserEvent};
 use crate::native::flow::{Action, Find, Flow, PAD_Y};
 use crate::native::keys::{self, encode};
 use crate::native::select::{Selection, Unit};
-use crate::native::system::{Clipboard, Which, new_window, open_url};
+use crate::native::system::{Clipboard, Which, new_window, open_url, run_command};
 use crate::native::theme;
 use draw::measure;
 use input::mods;
@@ -341,6 +341,10 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 Some(Binding::Send { send }) => {
                     view.borrow_mut().scroll_to_end();
                     session.input(send.as_bytes());
+                    return glib::Propagation::Stop;
+                }
+                Some(Binding::Command { command }) => {
+                    run_command(&command, session.cwd());
                     return glib::Propagation::Stop;
                 }
                 Some(Binding::Action(action)) if view.borrow_mut().run_action(&action) => {

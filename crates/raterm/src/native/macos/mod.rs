@@ -36,7 +36,7 @@ use crate::native::flow::{Action, Find, Flow};
 use crate::native::keys::{self, Mods, encode};
 use crate::native::paint::INDICATOR_SHOWN;
 use crate::native::select::{Selection, Unit};
-use crate::native::system::{Clipboard, Which, new_window, open_url};
+use crate::native::system::{Clipboard, Which, new_window, open_url, run_command};
 use crate::native::theme;
 use blocks::WebView;
 use draw::{Font, Grid};
@@ -260,6 +260,9 @@ impl View {
                 Some(Binding::Send { send }) => {
                     self.scroll_to_end();
                     return self.session.input(send.as_bytes());
+                }
+                Some(Binding::Command { command }) => {
+                    return run_command(&command, self.session.cwd());
                 }
                 Some(Binding::Action(action)) if self.run_action(&action) => return,
                 _ => {}
