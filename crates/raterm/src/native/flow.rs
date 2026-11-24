@@ -121,9 +121,9 @@ pub(super) struct Flow {
     /// The link under a Ctrl+click, opened on release unless a block was
     /// dragged.
     pub(super) link: Option<String>,
-    /// The pointer dragging the selection, while above or below the view:
-    /// the flow scrolls toward it (see `drag_scroll`).
-    pub(super) drag_out: Option<(f64, f64)>,
+    /// The pointer dragging the selection, while above or below the view,
+    /// and since when: the flow scrolls toward it (see `drag_scroll`).
+    pub(super) drag_out: Option<((f64, f64), Instant)>,
 }
 
 impl Flow {
@@ -203,25 +203,24 @@ impl Flow {
     /// when the selection changed.
     pub(super) fn drag(&mut self, x: f64, y: f64) -> bool {
         let bottom = PAD_Y + self.size.1 as f64 * self.cell.1;
-        self.drag_out = (self.selection.is_some() && (y < PAD_Y || y >= bottom)).then_some((x, y));
+        let out = self.selection.is_some() && (y < PAD_Y || y >= bottom);
+        let since = self.drag_out.map_or_else(Instant::now, |(_, since)| since);
+        self.drag_out = out.then_some(((x, y), since));
         self.move_head(x, y)
     }
 
     /// A tick of the drag above or below the view: the flow scrolls toward
-    /// the pointer, a row more for each row it is away, and the head
-    /// follows; true when the flow scrolled.
+    /// the pointer, faster the longer it stays out, and the head follows;
+    /// true when the flow scrolled.
     pub(super) fn drag_scroll(&mut self) -> bool {
-        let Some((x, y)) = self.drag_out else {
+        let Some(((x, y), since)) = self.drag_out else {
             return false;
         };
+        // On time, not on how far the pointer is: a window at the bottom of
+        // the screen leaves no room below it.
+        let n = (1 + since.elapsed().as_millis() / 300).min(8) as usize;
         let rows = self.size.1 as usize;
         let up = y < PAD_Y;
-        let away = if up {
-            PAD_Y - y
-        } else {
-            y - (PAD_Y + rows as f64 * self.cell.1)
-        };
-        let n = 1 + (away / self.cell.1) as usize;
         let before = self.scroll;
         self.scroll = if up {
             before + n
@@ -662,10 +661,10 @@ mod tests {
             block: None,
         });
 
-        // Two rows above the view: three rows a tick, up to line 1.
+        // Above the view: a row the first tick, up to line 1.
         flow.drag(0.0, -40.0);
         assert!(flow.drag_scroll());
-        assert_eq!(flow.scroll, 3);
+        assert_eq!(flow.scroll, 1);
         while flow.drag_scroll() {}
         // The whole flow above the view, and the head on its first line.
         let (first, rows) = flow.session.read(|t| {
@@ -681,7 +680,7 @@ mod tests {
         flow.drag(0.0, 100.0);
         assert!(flow.drag_out.is_none() && !flow.drag_scroll());
 
-        // Just below the view: a row a tick, down to the end.
+        // Below the view, the ramp starts again: a row the first tick.
         flow.drag(0.0, PAD_Y + 10.0 * 20.0);
         assert!(flow.drag_scroll());
         assert_eq!(flow.scroll, rows - 11);
