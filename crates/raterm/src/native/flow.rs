@@ -121,6 +121,9 @@ pub(super) struct Flow {
     /// The link under a Ctrl+click, opened on release unless a block was
     /// dragged.
     pub(super) link: Option<String>,
+    /// The pointer dragging the selection, while above or below the view:
+    /// the flow scrolls toward it (see `drag_scroll`).
+    pub(super) drag_out: Option<(f64, f64)>,
 }
 
 impl Flow {
@@ -152,6 +155,7 @@ impl Flow {
             pressed: None,
             last_cell: None,
             link: None,
+            drag_out: None,
         }
     }
 
@@ -193,6 +197,59 @@ impl Flow {
         }
         self.scroll = (self.scroll as f64 - 3.0 * dy).max(0.0) as usize;
         true
+    }
+
+    /// The pointer dragging the selection moved: the head follows it; true
+    /// when the selection changed.
+    pub(super) fn drag(&mut self, x: f64, y: f64) -> bool {
+        let bottom = PAD_Y + self.size.1 as f64 * self.cell.1;
+        self.drag_out = (self.selection.is_some() && (y < PAD_Y || y >= bottom)).then_some((x, y));
+        self.move_head(x, y)
+    }
+
+    /// A tick of the drag above or below the view: the flow scrolls toward
+    /// the pointer, a row more for each row it is away, and the head
+    /// follows; true when the flow scrolled.
+    pub(super) fn drag_scroll(&mut self) -> bool {
+        let Some((x, y)) = self.drag_out else {
+            return false;
+        };
+        let rows = self.size.1 as usize;
+        let up = y < PAD_Y;
+        let away = if up {
+            PAD_Y - y
+        } else {
+            y - (PAD_Y + rows as f64 * self.cell.1)
+        };
+        let n = 1 + (away / self.cell.1) as usize;
+        let before = self.scroll;
+        self.scroll = if up {
+            before + n
+        } else {
+            before.saturating_sub(n)
+        };
+        // Not past the top of the flow.
+        self.scroll = self.session.read(|term| {
+            let len = self.rows_up(term, rows + self.scroll).len();
+            self.scroll.min(len.saturating_sub(rows))
+        });
+        if self.scroll == before {
+            return false;
+        }
+        self.move_head(x, y);
+        true
+    }
+
+    fn move_head(&mut self, x: f64, y: f64) -> bool {
+        let block = self.selection.is_some_and(|s| s.block.is_some());
+        if let Some(pos) = self.pos_at(x, y, block)
+            && let Some(selection) = &mut self.selection
+            && selection.head != pos
+        {
+            selection.head = pos;
+            return true;
+        }
+        false
     }
 
     /// The position in the flow at a point of the view: the nearest boundary
@@ -516,7 +573,19 @@ impl Flow {
     /// The rows in view, top to bottom; the flow starts at the top of the view
     /// until it fills it.
     pub(super) fn visuals<'a>(&self, term: &'a Terminal) -> Vec<Visual<'a>> {
-        let (cols, rows) = (self.size.0.max(1) as usize, self.size.1 as usize);
+        let rows = self.size.1 as usize;
+        let mut out = self.rows_up(term, rows + self.scroll);
+        let scroll = self.scroll.min(out.len().saturating_sub(rows));
+        let end = (scroll + rows).min(out.len());
+        let mut shown: Vec<Visual> = out.drain(scroll..end).collect();
+        shown.reverse();
+        shown
+    }
+
+    /// The rows of the flow from its end up, at least `want` of them while
+    /// there are.
+    fn rows_up<'a>(&self, term: &'a Terminal, want: usize) -> Vec<Visual<'a>> {
+        let cols = self.size.0.max(1) as usize;
         let screen = term.screen();
         // Empty rows below the last used one are not shown,
         // so that output stays right above the prompt.
@@ -529,7 +598,6 @@ impl Flow {
                 .map_or(1, |y| y + 1)
         };
         let mut out: Vec<Visual> = Vec::new();
-        let want = rows + self.scroll;
         let next = term.history.next();
         for (y, line) in screen[..used].iter().enumerate().rev() {
             out.push(Visual::Text {
@@ -569,10 +637,55 @@ impl Flow {
                 }
             }
         }
-        let scroll = self.scroll.min(out.len().saturating_sub(rows));
-        let end = (scroll + rows).min(out.len());
-        let mut shown: Vec<Visual> = out.drain(scroll..end).collect();
-        shown.reverse();
-        shown
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::select::Unit;
+
+    #[test]
+    fn dragging_out_of_the_view_scrolls_up_to_the_top_and_back() {
+        let config = Config::default();
+        let command = ["seq", "1", "40"].map(String::from);
+        let (session, output) = Session::spawn(&config, &command, 80, 24, (10.0, 20.0)).unwrap();
+        session.pump(output, |_| ());
+        let mut flow = Flow::new(session, config, Arc::default(), (10.0, 20.0));
+        flow.size = (80, 10);
+        let pos = flow.pos_at(0.0, 0.0, false).unwrap();
+        flow.selection = Some(Selection {
+            anchor: pos,
+            head: pos,
+            unit: Unit::Cell,
+            block: None,
+        });
+
+        // Two rows above the view: three rows a tick, up to line 1.
+        flow.drag(0.0, -40.0);
+        assert!(flow.drag_scroll());
+        assert_eq!(flow.scroll, 3);
+        while flow.drag_scroll() {}
+        // The whole flow above the view, and the head on its first line.
+        let (first, rows) = flow.session.read(|t| {
+            (
+                t.history.first(),
+                t.history.next() as usize + t.screen().len(),
+            )
+        });
+        assert_eq!(flow.scroll, rows - 10);
+        assert_eq!(flow.selection.unwrap().head.at, first);
+
+        // Back in the view: no more scrolling.
+        flow.drag(0.0, 100.0);
+        assert!(flow.drag_out.is_none() && !flow.drag_scroll());
+
+        // Just below the view: a row a tick, down to the end.
+        flow.drag(0.0, PAD_Y + 10.0 * 20.0);
+        assert!(flow.drag_scroll());
+        assert_eq!(flow.scroll, rows - 11);
+        while flow.drag_scroll() {}
+        assert_eq!(flow.scroll, 0);
     }
 }

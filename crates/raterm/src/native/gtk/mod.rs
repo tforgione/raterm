@@ -52,6 +52,8 @@ struct View {
     redraw: Arc<Redraw>,
     /// This view, for the handlers of the web views it makes.
     me: Weak<RefCell<View>>,
+    /// Whether `drag_scroll`'s timer runs.
+    drag_timer: bool,
     block_style: String,
     search_entry: gtk::Entry,
     overlay: gtk::Overlay,
@@ -131,6 +133,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         root: None,
         redraw: redraw.clone(),
         me: Weak::new(),
+        drag_timer: false,
         search_entry: search_entry.clone(),
         overlay: overlay.clone(),
         rows: RefCell::default(),
@@ -244,13 +247,11 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             if !ev.state().contains(gdk::ModifierType::BUTTON1_MASK) {
                 return glib::Propagation::Proceed;
             }
-            let block = view.flow.selection.is_some_and(|s| s.block.is_some());
-            if let Some(pos) = view.flow.pos_at(x, y, block)
-                && let Some(selection) = &mut view.flow.selection
-                && selection.head != pos
-            {
-                selection.head = pos;
+            if view.flow.drag(x, y) {
                 view.area.queue_draw();
+            }
+            if view.flow.drag_out.is_some() {
+                view.drag_scroll();
             }
             glib::Propagation::Stop
         });
@@ -267,6 +268,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
                 return glib::Propagation::Stop;
             }
             if ev.button() == 1 {
+                view.flow.drag_out = None;
                 let link = view.flow.link.take();
                 if view.flow.selection.is_some_and(|s| s.is_empty()) {
                     view.flow.selection = None;
@@ -594,6 +596,30 @@ impl View {
             self.area.allocated_width(),
             (3.0 * ch).ceil() as i32 + 1,
         );
+    }
+
+    /// Scrolls the flow while the selection is dragged above or below it.
+    fn drag_scroll(&mut self) {
+        if std::mem::replace(&mut self.drag_timer, true) {
+            return;
+        }
+        let me = self.me.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+            let Some(view) = me.upgrade() else {
+                return glib::ControlFlow::Break;
+            };
+            let Ok(mut view) = view.try_borrow_mut() else {
+                return glib::ControlFlow::Continue;
+            };
+            if view.flow.drag_out.is_none() {
+                view.drag_timer = false;
+                return glib::ControlFlow::Break;
+            }
+            if view.flow.drag_scroll() {
+                view.layout();
+            }
+            glib::ControlFlow::Continue
+        });
     }
 
     /// Shows the scroll indicator, and redraws while it fades.

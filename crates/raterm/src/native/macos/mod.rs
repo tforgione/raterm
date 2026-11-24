@@ -72,6 +72,8 @@ struct View {
     last_click: Option<(Instant, (f64, f64), u8)>,
     /// When the cursor blinks next.
     next_blink: Instant,
+    /// When the flow scrolls next under a selection dragged out of it.
+    next_drag: Instant,
     /// The text of the search field, as last searched.
     search_query: String,
     /// The search field, while it is open.
@@ -131,6 +133,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             left_down: false,
             last_click: None,
             next_blink: Instant::now() + BLINK,
+            next_drag: Instant::now(),
             search_query: String::new(),
             search_field: None,
             typed: false,
@@ -199,13 +202,24 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
             },
             _ => {}
         }
+        // Scrolls while the selection is dragged out of the view, here and
+        // not in `tick`: the pointer moving there would keep putting it off.
+        if v.flow.drag_out.is_some() && Instant::now() >= v.next_drag {
+            v.next_drag = Instant::now() + Duration::from_millis(40);
+            if v.flow.drag_scroll() {
+                v.layout();
+            }
+        }
         // Wakes up to blink the cursor, and to fade the scroll indicator.
         let fading = v.flow.scrolled_at.get().is_some();
-        let next = if fading {
+        let mut next = if fading {
             Instant::now() + Duration::from_millis(40)
         } else {
             v.next_blink
         };
+        if v.flow.drag_out.is_some() {
+            next = next.min(v.next_drag);
+        }
         if *control_flow != ControlFlow::Exit {
             *control_flow = ControlFlow::WaitUntil(next);
         }
@@ -351,12 +365,7 @@ impl View {
         if self.flow.report_motion(self.mods, x, y) || !self.left_down {
             return;
         }
-        let block = self.flow.selection.is_some_and(|s| s.block.is_some());
-        if let Some(pos) = self.flow.pos_at(x, y, block)
-            && let Some(selection) = &mut self.flow.selection
-            && selection.head != pos
-        {
-            selection.head = pos;
+        if self.flow.drag(x, y) {
             self.grid.invalidate();
         }
     }
@@ -371,6 +380,7 @@ impl View {
         }
         if button == MouseButton::Left {
             self.left_down = false;
+            self.flow.drag_out = None;
             let link = self.flow.link.take();
             if self.flow.selection.is_some_and(|s| s.is_empty()) {
                 self.flow.selection = None;
