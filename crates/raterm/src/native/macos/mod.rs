@@ -32,7 +32,7 @@ use crate::native::blocks::{
     viewer_document,
 };
 use crate::native::events::{self, Redraw, UserEvent};
-use crate::native::flow::{Action, Find, Flow};
+use crate::native::flow::{Action, DRAG_TICK, Find, Flow};
 use crate::native::keys::{self, Mods, encode};
 use crate::native::paint::INDICATOR_SHOWN;
 use crate::native::select::{Selection, Unit};
@@ -205,7 +205,7 @@ pub fn run(config: Config, command: &[String], title: String) -> Result<(), Erro
         // Scrolls while the selection is dragged out of the view, here and
         // not in `tick`: the pointer moving there would keep putting it off.
         if v.flow.drag_out.is_some() && Instant::now() >= v.next_drag {
-            v.next_drag = Instant::now() + Duration::from_millis(40);
+            v.next_drag = Instant::now() + DRAG_TICK;
             if v.flow.drag_scroll() {
                 v.layout();
             }

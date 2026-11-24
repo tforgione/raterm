@@ -16,6 +16,9 @@ pub struct Config {
     pub bold_is_bright: bool,
     /// The window title follows the title set by programs (OSC 0/2).
     pub dynamic_title: bool,
+    /// Lines a second the view scrolls at most under a selection dragged
+    /// above or below it.
+    pub selection_scroll_max: u32,
     pub font: Font,
     pub colors: Colors,
     pub cursor: Cursor,
@@ -242,6 +245,7 @@ impl Default for Config {
             scrollback: None,
             bold_is_bright: false,
             dynamic_title: true,
+            selection_scroll_max: 200,
             font: Font::default(),
             colors: Colors::default(),
             cursor: Cursor::default(),

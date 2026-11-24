@@ -140,6 +140,7 @@ the defaults, except for the commented-out lines and the `[keys]` examples:
 scrollback = 10000        # lines and blocks kept
 bold_is_bright = false    # bold text in the 8 normal colors uses their bright variant
 dynamic_title = true      # the window title follows the program's (OSC 0/2)
+selection_scroll_max = 200  # lines a second, at most, when a selection is dragged out of the view
 
 [font]
 family = "monospace"      # as fontconfig names it: see `fc-list : family`

@@ -25,7 +25,7 @@ use webkit2gtk::WebView;
 
 use crate::native::blocks::{BlockView, block_style, css_fonts};
 use crate::native::events::{self, Redraw, UserEvent};
-use crate::native::flow::{Action, Find, Flow, PAD_Y};
+use crate::native::flow::{Action, DRAG_TICK, Find, Flow, PAD_Y};
 use crate::native::keys::{self, encode};
 use crate::native::select::{Selection, Unit};
 use crate::native::system::{Clipboard, Which, new_window, open_url, run_command};
@@ -604,7 +604,7 @@ impl View {
             return;
         }
         let me = self.me.clone();
-        glib::timeout_add_local(std::time::Duration::from_millis(40), move || {
+        glib::timeout_add_local(DRAG_TICK, move || {
             let Some(view) = me.upgrade() else {
                 return glib::ControlFlow::Break;
             };

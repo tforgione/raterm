@@ -7,7 +7,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use raterm::config::{Binding, Config};
 use raterm::history::Entry;
@@ -23,6 +23,8 @@ use super::system::Which;
 
 pub(super) const PAD_X: f64 = 4.0;
 pub(super) const PAD_Y: f64 = 2.0;
+/// How often the flow scrolls under a selection dragged out of the view.
+pub(super) const DRAG_TICK: Duration = Duration::from_millis(40);
 /// Rows a block takes until its web view has measured it.
 const BLOCK_ROWS: usize = 3;
 
@@ -218,7 +220,8 @@ impl Flow {
         };
         // On time, not on how far the pointer is: a window at the bottom of
         // the screen leaves no room below it.
-        let n = (1 + since.elapsed().as_millis() / 300).min(8) as usize;
+        let max = self.config.selection_scroll_max as u128 * DRAG_TICK.as_millis() / 1000;
+        let n = (1 + since.elapsed().as_millis() / 300).min(max.max(1)) as usize;
         let rows = self.size.1 as usize;
         let up = y < PAD_Y;
         let before = self.scroll;
